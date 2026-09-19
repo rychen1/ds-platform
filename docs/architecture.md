@@ -1006,6 +1006,10 @@ These decisions are stable before substantial implementation:
    `Claim.layer` is the four-way enum above.
 7. **ML/AI:** models and prompts are artifacts; champion is an alias;
    invocations recorded as `InferenceRecord`; no common predict API.
+   Supervised experiment contracts live in `ds_platform.modeling` (imported
+   separately; not re-exported from `ds_platform`). Narrow `Classifier` /
+   `Regressor` protocols and optional holdout orchestration do not replace
+   this freeze.
 8. **Peers, not internals:** Dagster, MLflow, cloud SDKs stay outside
    the core package.
 9. **Interchange:** tables as Parquet; documents as JSON/JSONL; Arrow

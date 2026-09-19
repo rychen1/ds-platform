@@ -158,9 +158,11 @@ def test_committed_json_schemas_match_models() -> None:
 
 def test_core_import_graph_has_no_forbidden_libraries() -> None:
     import ds_platform  # noqa: F401
+    import ds_platform.modeling  # noqa: F401
 
     forbidden = {
         "boto3",
+        "board_game_analysis",
         "dagster",
         "dask",
         "duckdb",
@@ -170,6 +172,7 @@ def test_core_import_graph_has_no_forbidden_libraries() -> None:
         "pyarrow",
         "pyspark",
         "ray",
+        "restaurant_intelligence",
         "sqlmesh",
         "streamlit",
     }

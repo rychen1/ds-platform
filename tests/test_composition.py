@@ -178,8 +178,11 @@ def test_put_record_round_trips_canonical_bytes(tmp_path: Path) -> None:
 
 
 def test_composition_import_graph_has_no_vendor_stack() -> None:
+    import ds_platform.modeling  # noqa: F401
+
     forbidden = {
         "boto3",
+        "board_game_analysis",
         "dagster",
         "dask",
         "duckdb",
@@ -189,6 +192,7 @@ def test_composition_import_graph_has_no_vendor_stack() -> None:
         "pyarrow",
         "pyspark",
         "ray",
+        "restaurant_intelligence",
         "sqlmesh",
         "streamlit",
     }
