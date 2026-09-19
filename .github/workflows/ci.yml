@@ -47,7 +47,7 @@ jobs:
 
       # Use trivy-action >= 0.35.0. Do not pin to `latest`.
       - name: Scan lockfile vulnerabilities
-        uses: aquasecurity/trivy-action@0.36.0
+        uses: aquasecurity/trivy-action@57a97c7
         with:
           scan-type: fs
           scan-ref: .
