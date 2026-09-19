@@ -8,7 +8,6 @@ from ds_platform.store import (
     ArtifactNotFoundError,
     HashMismatchError,
     LocalStore,
-    PayloadConflictError,
 )
 from ds_platform.types import ArtifactKind, ArtifactRecord, Environment, RunContext
 
@@ -74,9 +73,11 @@ def test_put_does_not_silently_mutate_existing_payload(tmp_path: Path) -> None:
         store.put(_PID, b"mutated-bytes", media_type="text/plain")
     colliding = tmp_path / _PID[:2] / _PID[2:4] / _PID
     colliding.write_bytes(b"tampered")
-    with pytest.raises(PayloadConflictError):
-        store.put(_PID, _PAYLOAD, media_type="text/plain")
-    assert store.get(_PID) == b"tampered"
+    with pytest.raises(HashMismatchError, match="stored bytes"):
+        store.get(_PID)
+    repaired = store.put(_PID, _PAYLOAD, media_type="text/plain")
+    assert store.get(_PID) == _PAYLOAD
+    assert repaired.uri.endswith(_PID)
 
 
 def test_records_are_stored_through_the_same_store(tmp_path: Path) -> None:

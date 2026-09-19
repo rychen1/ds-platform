@@ -178,3 +178,15 @@ def test_core_import_graph_has_no_forbidden_libraries() -> None:
     }
     loaded = forbidden.intersection(sys.modules)
     assert loaded == set()
+
+
+def test_frozen_json_rejects_mutation() -> None:
+    from ds_platform.types import FrozenList, freeze_json_value
+
+    frozen = freeze_json_value({"ks": [1, 3], "nested": {"ok": True}})
+    assert frozen["ks"] == [1, 3]
+    assert isinstance(frozen["ks"], FrozenList)
+    with pytest.raises(TypeError, match="frozen mapping"):
+        frozen["ks"] = [2]
+    with pytest.raises(TypeError, match="frozen sequence"):
+        frozen["ks"].append(5)

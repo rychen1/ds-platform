@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
+import math
+import re
 from collections.abc import Mapping, Sequence
 from datetime import date
 from typing import Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
+from ds_platform.hashing import SHA256_HEX_PATTERN
+
 type Scalar = str | int | float | bool | None
+
+_SHA256_HEX = re.compile(SHA256_HEX_PATTERN)
 
 
 class _FrozenModel(BaseModel):
@@ -52,6 +58,10 @@ class FeatureTable(_FrozenModel):
                     raise ValueError(
                         f"values[{row_index}][{cell_index}] must be a Scalar"
                     )
+                if isinstance(cell, float) and not math.isfinite(cell):
+                    raise ValueError(
+                        f"values[{row_index}][{cell_index}] must be a finite float"
+                    )
         return self
 
 
@@ -74,6 +84,7 @@ def align_feature_tables(
     tables: Sequence[FeatureTable],
     *,
     how: Literal["inner"] = "inner",
+    on_missing: Literal["inner", "error"] = "inner",
 ) -> FeatureTable:
     """Join tables on ``entity_ids`` with deterministic column naming.
 
@@ -103,6 +114,13 @@ def align_feature_tables(
     common_ids = set(first.entity_ids)
     for table in tables[1:]:
         common_ids &= set(table.entity_ids)
+    if on_missing == "error":
+        for table in tables:
+            missing = set(table.entity_ids) - common_ids
+            if missing:
+                raise ValueError(f"align is missing entities: {sorted(missing)}")
+    elif on_missing != "inner":
+        raise ValueError(f"unsupported align on_missing: {on_missing!r}")
     aligned_ids = tuple(
         entity_id for entity_id in first.entity_ids if entity_id in common_ids
     )
@@ -193,6 +211,20 @@ def extract_column(table: FeatureTable, column: str) -> tuple[Scalar, ...]:
     except ValueError as exc:
         raise KeyError(f"column not found: {column!r}") from exc
     return tuple(row[column_index] for row in table.values)
+
+
+def require_source_payload_ids(source_payload_ids: Sequence[str]) -> None:
+    """Reject strings that are not lowercase SHA-256 hex payload ids.
+
+    In-memory tables do not call this. Envelope ``inputs`` are already
+    hash-checked. Call this when a persist path needs the same rule on
+    table-local source ids.
+    """
+    for source_id in source_payload_ids:
+        if _SHA256_HEX.fullmatch(source_id) is None:
+            raise ValueError(
+                f"source_payload_ids must be lowercase sha256 hex: {source_id!r}"
+            )
 
 
 def _is_scalar(value: object) -> bool:

@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import date
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ds_platform.hashing import SHA256_HEX_PATTERN, sha256_hex
 from ds_platform.modeling._spec_json import spec_canonical_json_bytes
-from ds_platform.types import LOGICAL_KEY_PATTERN
+from ds_platform.types import LOGICAL_KEY_PATTERN, freeze_json_value
 
 
 class _FrozenModel(BaseModel):
@@ -52,11 +53,23 @@ class TargetSpec(_FrozenModel):
 
 class ModelSpec(_FrozenModel):
     family: str = Field(min_length=1)
-    params: dict[str, JsonValue] = Field(default_factory=dict)
+    params: Mapping[str, JsonValue] = Field(default_factory=dict)
+
+    @field_validator("params")
+    @classmethod
+    def _freeze_params(cls, params: Mapping[str, JsonValue]) -> Any:
+        return freeze_json_value(dict(params))
 
 
 class SplitSpec(_FrozenModel):
-    method: Literal["holdout", "kfold"]
+    """Train/test assignment configuration.
+
+    ``as_of`` drops entities with ``timestamp > as_of`` before splitting.
+    It is not a temporal cut: use ``method="temporal"`` to put later
+    remaining entities in test.
+    """
+
+    method: Literal["holdout", "kfold", "temporal"]
     seed: int
     test_size: float | None = None
     n_splits: int | None = None
@@ -66,7 +79,12 @@ class SplitSpec(_FrozenModel):
 
 class MetricSpec(_FrozenModel):
     name: str = Field(min_length=1)
-    params: dict[str, JsonValue] = Field(default_factory=dict)
+    params: Mapping[str, JsonValue] = Field(default_factory=dict)
+
+    @field_validator("params")
+    @classmethod
+    def _freeze_params(cls, params: Mapping[str, JsonValue]) -> Any:
+        return freeze_json_value(dict(params))
 
 
 class ExperimentSpec(_FrozenModel):
@@ -97,36 +115,63 @@ class ExperimentSpec(_FrozenModel):
 
 
 class EncodingSpec(_FrozenModel):
+    """Encoder configuration. ``seed`` is hashed; adapters must apply it."""
+
     family: str = Field(min_length=1)
-    params: dict[str, JsonValue] = Field(default_factory=dict)
+    params: Mapping[str, JsonValue] = Field(default_factory=dict)
     dim: int = Field(gt=0)
     seed: int
+
+    @field_validator("params")
+    @classmethod
+    def _freeze_params(cls, params: Mapping[str, JsonValue]) -> Any:
+        return freeze_json_value(dict(params))
 
 
 class ConditioningSpec(_FrozenModel):
     family: str = Field(min_length=1)
-    params: dict[str, JsonValue] = Field(default_factory=dict)
+    params: Mapping[str, JsonValue] = Field(default_factory=dict)
     seed: int
+
+    @field_validator("params")
+    @classmethod
+    def _freeze_params(cls, params: Mapping[str, JsonValue]) -> Any:
+        return freeze_json_value(dict(params))
 
 
 class PerspectiveSpec(_FrozenModel):
     subject_field: str = Field(min_length=1)
     perspective_field: str = Field(min_length=1)
-    params: dict[str, JsonValue] = Field(default_factory=dict)
+    params: Mapping[str, JsonValue] = Field(default_factory=dict)
+
+    @field_validator("params")
+    @classmethod
+    def _freeze_params(cls, params: Mapping[str, JsonValue]) -> Any:
+        return freeze_json_value(dict(params))
 
 
 class SequenceSpec(_FrozenModel):
     family: str = Field(min_length=1)
-    params: dict[str, JsonValue] = Field(default_factory=dict)
+    params: Mapping[str, JsonValue] = Field(default_factory=dict)
     seed: int
     max_events: int | None = None
+
+    @field_validator("params")
+    @classmethod
+    def _freeze_params(cls, params: Mapping[str, JsonValue]) -> Any:
+        return freeze_json_value(dict(params))
 
 
 class GeometrySpec(_FrozenModel):
     metric: Literal["cosine", "l2"]
     k: int = Field(ge=1)
     family: str = Field(min_length=1)
-    params: dict[str, JsonValue] = Field(default_factory=dict)
+    params: Mapping[str, JsonValue] = Field(default_factory=dict)
+
+    @field_validator("params")
+    @classmethod
+    def _freeze_params(cls, params: Mapping[str, JsonValue]) -> Any:
+        return freeze_json_value(dict(params))
 
 
 def spec_config_hash(spec: BaseModel) -> str:
@@ -135,5 +180,11 @@ def spec_config_hash(spec: BaseModel) -> str:
 
 
 def experiment_config_hash(spec: ExperimentSpec) -> str:
-    """Return the SHA-256 hex digest of the canonical experiment configuration."""
-    return spec_config_hash(spec)
+    """Return the SHA-256 hex digest of the scientific experiment configuration.
+
+    ``experiment_id`` is a human label and is excluded. Code, environment,
+    and lockfiles belong on ``RunContext``, not in this hash.
+    """
+    payload = spec.model_dump(mode="python", exclude_none=True)
+    payload.pop("experiment_id", None)
+    return sha256_hex(spec_canonical_json_bytes(payload))

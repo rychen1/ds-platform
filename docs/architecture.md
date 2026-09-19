@@ -8,8 +8,11 @@ Those systems are treated as peers. It is also not a restatement of an
 `ArtifactEnvelope`-centered sketch. That idea is evaluated and only kept
 where it survives the evaluation.
 
-Implementation has not started. This document decides what may be frozen
-before code exists.
+The core library is implemented: identity hashing, record types, a local
+store, and `ds_platform.modeling`. This document remains the source of
+truth for what is frozen. The adversarial audit in
+`docs/architecture/ds-platform-adversarial-audit.md` recorded pre-fix
+gaps; the v0 contracts below incorporate those repairs.
 
 ---
 
@@ -804,7 +807,7 @@ internal LLM gateway. Those are gravity wells.
 - artifact as root noun; tables are not the root
 - `payload_id` = sha256(bytes); location is not identity
 - `record_id` separate from `payload_id`
-- `logical_key` is an alias with project namespace
+- `logical_key` is a non-unique project-namespaced label, not a lookup
 - write-once payloads; updates are new artifacts
 - quality / evaluation / claims are separate artifacts
 - models and prompts are artifacts
@@ -994,12 +997,17 @@ would be the least impressive thing in the portfolio.
 These decisions are stable before substantial implementation:
 
 1. **Root noun:** artifact = payload bytes + kind + `payload_id`.
+   v0 is one byte sequence; callers pack multi-file layouts before hashing.
 2. **Identity:** `payload_id = sha256(payload)`; `record_id =
-   sha256(canonical envelope)`; `logical_key = {project}:{name}[:version]`;
-   location is not an id.
-3. **Mutation:** payloads are write-once; aliases move.
+   sha256(canonical envelope)`; `logical_key = {project}:{name}[:version]`
+   and is not unique or resolved; location is not an id. Envelope
+   datetimes are timezone-aware UTC with microsecond precision. Empty
+   lists and `schema_version=0` are omitted from the hash.
+3. **Mutation:** payloads are write-once; `get` rehashes; corrupt objects
+   may be repaired by putting the correct bytes. Records are frozen.
 4. **Record document:** slim envelope (identity, kind, run, refs,
-   contract ref, policy refs). No inlined reports.
+   contract ref, policy refs, `schema_version`). No inlined reports.
+   `inputs` are consumed payload ids. `derived_from` is reserved unused.
 5. **Separate artifacts:** `quality`, `evaluation`, `claim_set`,
    `review`; evals cite a frozen suite artifact.
 6. **Epistemic types:** `Citation` ≠ `Evidence` ≠ `Claim`;
@@ -1012,8 +1020,10 @@ These decisions are stable before substantial implementation:
    this freeze.
 8. **Peers, not internals:** Dagster, MLflow, cloud SDKs stay outside
    the core package.
-9. **Interchange:** tables as Parquet; documents as JSON/JSONL; Arrow
-   as the in-memory convention in projects.
+9. **Interchange:** the library does not write Parquet. Projects may
+   persist tables as Parquet; in-memory modeling tables are tuples.
+   Float-bearing **payloads** use spec canonical JSON. Envelopes reject
+   floats. Representations are `kind=representation`, not `dataset`.
 10. **I/O:** at most one `Store` protocol; local filesystem first;
     no other `*Backend` types.
 11. **Standards:** JSON Schema native; OpenLineage export-only; OTel

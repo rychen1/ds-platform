@@ -6,13 +6,10 @@ import json
 import sys
 from datetime import UTC, datetime
 
-import pytest
-
 from ds_platform import (
     ArtifactKind,
     Environment,
     LocalStore,
-    PayloadConflictError,
     RelationType,
     RunContext,
     payload_id,
@@ -143,7 +140,7 @@ def test_prediction_payload_bytes_is_deterministic() -> None:
     assert first.decode("utf-8").count("\n") == 2
 
 
-def test_put_record_helpers_reject_conflicting_bytes(tmp_path) -> None:
+def test_put_record_helpers_repair_corrupted_bytes(tmp_path) -> None:
     store = LocalStore(tmp_path)
     data = b"first-model"
     put_model_artifact(
@@ -156,8 +153,8 @@ def test_put_record_helpers_reject_conflicting_bytes(tmp_path) -> None:
     pid = payload_id(data)
     colliding = tmp_path / pid[:2] / pid[2:4] / pid
     colliding.write_bytes(b"tampered")
-    with pytest.raises(PayloadConflictError):
-        store.put(pid, data, media_type="application/octet-stream")
+    store.put(pid, data, media_type="application/octet-stream")
+    assert store.get(pid) == data
 
 
 def test_records_import_does_not_load_forbidden_modules() -> None:

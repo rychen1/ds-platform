@@ -8,8 +8,8 @@ from pydantic import BaseModel, ConfigDict
 
 from ds_platform.modeling.capabilities import Embedder
 from ds_platform.modeling.records import (
-    put_feature_dataset,
     put_model_artifact,
+    put_representation_artifact,
     representation_payload_bytes,
 )
 from ds_platform.modeling.spec import EncodingSpec, spec_config_hash
@@ -59,9 +59,10 @@ def run_encoding(
         )
     if tuple(table.entity_ids) != tuple(entity_ids):
         raise ValueError("encoder must return representations keyed by entity_ids")
+    table = table.model_copy(update={"encoding_hash": config_hash})
 
     input_ids = list(inputs)
-    representation_payload_id, _representation_record_id = put_feature_dataset(
+    representation_payload_id, _representation_record_id = put_representation_artifact(
         store,
         representation_payload_bytes(table),
         run=run_with_hash,

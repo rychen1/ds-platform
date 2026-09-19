@@ -133,9 +133,9 @@ def test_non_xml_chain_uses_existing_types_only(tmp_path: Path) -> None:
     )
 
     assert raw_pid != document_pid != dataset_pid
-    assert document.inputs == [raw_pid]
+    assert document.inputs == (raw_pid,)
     assert document.contract_ref == _cafe_contract()
-    assert dataset.inputs == [document_pid]
+    assert dataset.inputs == (document_pid,)
     assert quality.related[0].rel is RelationType.QUALITY_FOR
     assert quality.related[0].payload_id == dataset_pid
     assert claims.related[0].rel is RelationType.CLAIMS_ABOUT

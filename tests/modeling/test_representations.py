@@ -143,7 +143,7 @@ def test_as_feature_table_uses_prefix() -> None:
 
 
 def test_representation_payload_bytes_are_deterministic() -> None:
-    table = _table(vectors=((-0.0, float("inf")), (1.25, float("nan"))))
+    table = _table(vectors=((-0.0, 2.5), (1.25, 0.0)))
     first = representation_payload_bytes(table)
     second = representation_payload_bytes(table)
     assert first == second

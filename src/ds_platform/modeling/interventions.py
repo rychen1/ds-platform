@@ -54,7 +54,10 @@ def apply_intervention(
 
     Both outputs are keyed by ``query.query_ids``.
     """
-    sources = ("",) * len(query.query_ids)
+    context_sources = dict(
+        zip(contexts.entity_ids, contexts.source_payload_ids, strict=True)
+    )
+    sources = tuple(context_sources[context_id] for context_id in query.context_ids)
     factual_pairs = PairTable(
         pair_ids=query.query_ids,
         context_ids=query.context_ids,

@@ -200,9 +200,8 @@ def test_public_modeling_lifecycle_with_two_views(tmp_path) -> None:
     evaluation_payload = json.loads(
         store.get(result.evaluation_payload_id).decode("utf-8")
     )
-    report_metrics = result.report.metrics
-    assert evaluation_payload["metrics"]["accuracy"] == report_metrics["accuracy"]
-    assert evaluation_payload["metrics"]["macro_f1"] == report_metrics["macro_f1"]
+    assert set(evaluation_payload["metrics"]) == set(result.report.metrics)
+    assert evaluation_payload["n"] == result.report.n
 
     feature_record = _find_envelope(tmp_path, result.feature_payload_id)
     model_record = _find_envelope(tmp_path, result.model_payload_id)
@@ -218,9 +217,13 @@ def test_public_modeling_lifecycle_with_two_views(tmp_path) -> None:
     prediction_inputs = cast(list[str], prediction_record["inputs"])
     evaluation_inputs = cast(list[str], evaluation_record["inputs"])
     assert result.feature_payload_id in model_inputs
+    assert result.split_payload_id in model_inputs
     assert result.model_payload_id in prediction_inputs
     assert result.feature_payload_id in prediction_inputs
+    assert result.split_payload_id in prediction_inputs
     assert result.prediction_payload_id in evaluation_inputs
+    assert result.model_payload_id in evaluation_inputs
+    assert result.split_payload_id in evaluation_inputs
     assert evaluation_record["related"] == [
         {
             "rel": RelationType.EVALUATION_OF,

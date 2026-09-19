@@ -32,6 +32,7 @@ class RepresentationTable(_FrozenModel):
     vectors: tuple[tuple[float, ...], ...]
     dim: int
     source_payload_ids: tuple[str, ...]
+    encoding_hash: str | None = None
 
     @model_validator(mode="after")
     def _check_invariants(self) -> RepresentationTable:
@@ -48,11 +49,18 @@ class RepresentationTable(_FrozenModel):
                 raise ValueError(
                     f"vectors row {row_index} length must match dim {self.dim}"
                 )
+            for component in vector:
+                if not math.isfinite(component):
+                    raise ValueError(
+                        f"vectors row {row_index} must contain finite floats"
+                    )
         return self
 
 
 def align_representation_tables(
     tables: Sequence[RepresentationTable],
+    *,
+    on_missing: Literal["inner", "error"] = "inner",
 ) -> RepresentationTable:
     """Inner-join tables on ``entity_ids`` and concatenate vectors.
 
@@ -73,6 +81,13 @@ def align_representation_tables(
     common_ids = set(first.entity_ids)
     for table in tables[1:]:
         common_ids &= set(table.entity_ids)
+    if on_missing == "error":
+        for table in tables:
+            missing = set(table.entity_ids) - common_ids
+            if missing:
+                raise ValueError(f"align is missing entities: {sorted(missing)}")
+    elif on_missing != "inner":
+        raise ValueError(f"unsupported align on_missing: {on_missing!r}")
     aligned_ids = tuple(
         entity_id for entity_id in first.entity_ids if entity_id in common_ids
     )

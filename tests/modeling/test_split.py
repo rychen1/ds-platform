@@ -74,6 +74,33 @@ def test_split_entities_stratify_preserves_classes_in_test() -> None:
     assert test_labels == {"A", "B"}
 
 
+def test_split_entities_temporal_method_puts_later_ids_in_test() -> None:
+    entity_ids = ["early", "mid", "late"]
+    timestamps = [date(2026, 1, 1), date(2026, 6, 1), date(2026, 12, 1)]
+    assignment = split_entities(
+        entity_ids,
+        SplitSpec(method="temporal", seed=0, test_size=1 / 3),
+        timestamps=timestamps,
+    )[0]
+    assert assignment.train_ids == ("early", "mid")
+    assert assignment.test_ids == ("late",)
+
+
+def test_split_entities_stratify_is_stable_under_label_reorder() -> None:
+    spec = SplitSpec(method="holdout", seed=42, test_size=0.5, stratify=True)
+    first = split_entities(
+        [f"a{index}" for index in range(6)] + [f"b{index}" for index in range(6)],
+        spec,
+        labels=["A"] * 6 + ["B"] * 6,
+    )[0]
+    second = split_entities(
+        [f"b{index}" for index in range(6)] + [f"a{index}" for index in range(6)],
+        spec,
+        labels=["B"] * 6 + ["A"] * 6,
+    )[0]
+    assert set(first.test_ids) == set(second.test_ids)
+
+
 def test_split_entities_temporal_cutoff_drops_later_entities() -> None:
     entity_ids = ["e1", "e2", "e3"]
     timestamps = [date(2026, 1, 1), date(2026, 6, 1), date(2026, 12, 1)]

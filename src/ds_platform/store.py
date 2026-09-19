@@ -76,11 +76,13 @@ class LocalStore:
         path = self._object_path(payload_id)
         if path.is_file():
             existing = path.read_bytes()
-            if existing != data:
+            if existing == data:
+                return self._location(path)
+            if sha256_hex(existing) == payload_id:
                 raise PayloadConflictError(
                     f"payload {payload_id} already exists with different bytes"
                 )
-            return self._location(path)
+            # Existing bytes do not match the content-addressed key; repair.
         path.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=".tmp-")
         tmp_path = Path(tmp_name)
@@ -99,7 +101,11 @@ class LocalStore:
         path = self._existing_path(payload_id)
         if path is None:
             raise ArtifactNotFoundError(payload_id)
-        return path.read_bytes()
+        data = path.read_bytes()
+        digest = sha256_hex(data)
+        if digest != payload_id:
+            raise HashMismatchError(f"stored bytes for {payload_id} hash to {digest}")
+        return data
 
     def exists(self, payload_id: str) -> bool:
         return self._existing_path(payload_id) is not None

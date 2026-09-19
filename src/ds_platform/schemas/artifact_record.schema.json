@@ -13,7 +13,8 @@
         "claim_set",
         "review",
         "run",
-        "index"
+        "index",
+        "representation"
       ],
       "title": "ArtifactKind",
       "type": "string"
@@ -68,59 +69,26 @@
       "title": "Environment",
       "type": "string"
     },
-    "ExternalRunIds": {
+    "ExternalRunRef": {
       "additionalProperties": false,
+      "description": "One identifier from an external orchestrator, registry, or tracer.",
       "properties": {
-        "dagster": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Dagster"
+        "run_id": {
+          "minLength": 1,
+          "title": "Run Id",
+          "type": "string"
         },
-        "mlflow": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Mlflow"
-        },
-        "otel_trace": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Otel Trace"
-        },
-        "sqlmesh": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Sqlmesh"
+        "system": {
+          "minLength": 1,
+          "title": "System",
+          "type": "string"
         }
       },
-      "title": "ExternalRunIds",
+      "required": [
+        "system",
+        "run_id"
+      ],
+      "title": "ExternalRunRef",
       "type": "object"
     },
     "RelatedRef": {
@@ -210,15 +178,12 @@
           "$ref": "#/$defs/Environment"
         },
         "external_run_ids": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ExternalRunIds"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ExternalRunRef"
+          },
+          "title": "External Run Ids",
+          "type": "array"
         },
         "project": {
           "minLength": 1,
@@ -248,6 +213,7 @@
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
+  "description": "Slim sidecar for one payload.\n\n``inputs`` are payload ids consumed by the producing run.\n``derived_from`` is reserved and unused in v0; do not give it a second\nmeaning. Typed ``related`` refs are the closed ``RelationType`` set.\n\n``logical_key`` is a non-unique project label, not an identity and not\na catalog lookup. The same key may label many payloads.\n\nv0 artifacts are a single byte sequence. Multi-file layouts must be\npacked by the caller before hashing.",
   "properties": {
     "contract_ref": {
       "anyOf": [
@@ -266,6 +232,7 @@
       "type": "string"
     },
     "derived_from": {
+      "default": [],
       "items": {
         "pattern": "^[a-f0-9]{64}$",
         "type": "string"
@@ -274,6 +241,7 @@
       "type": "array"
     },
     "inherited_policy_refs": {
+      "default": [],
       "items": {
         "type": "string"
       },
@@ -281,6 +249,7 @@
       "type": "array"
     },
     "inputs": {
+      "default": [],
       "items": {
         "pattern": "^[a-f0-9]{64}$",
         "type": "string"
@@ -330,11 +299,18 @@
       "$ref": "#/$defs/RunContext"
     },
     "related": {
+      "default": [],
       "items": {
         "$ref": "#/$defs/RelatedRef"
       },
       "title": "Related",
       "type": "array"
+    },
+    "schema_version": {
+      "const": 0,
+      "default": 0,
+      "title": "Schema Version",
+      "type": "integer"
     }
   },
   "required": [

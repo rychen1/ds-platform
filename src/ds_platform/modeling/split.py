@@ -40,7 +40,7 @@ def split_entities(
     Holdout returns one assignment with empty ``validation_ids``. K-fold
     returns ``spec.n_splits`` assignments, each with empty ``validation_ids``.
     """
-    ids, split_labels = _prepare_entities(
+    ids, split_labels, split_times = _prepare_entities(
         entity_ids,
         labels=labels,
         timestamps=timestamps,
@@ -48,12 +48,18 @@ def split_entities(
     )
     if spec.stratify and split_labels is None:
         raise ValueError("labels are required when stratify is enabled")
+    if spec.method == "temporal" and spec.stratify:
+        raise ValueError("temporal split does not support stratify")
 
     if spec.method == "holdout":
         assignment = _holdout_assignment(ids, split_labels, spec)
         return (assignment,)
     if spec.method == "kfold":
         return _kfold_assignments(ids, split_labels, spec)
+    if spec.method == "temporal":
+        if split_times is None:
+            raise ValueError("timestamps are required for temporal split")
+        return (_temporal_assignment(ids, split_times, spec),)
     raise ValueError(f"unsupported split method: {spec.method!r}")
 
 
@@ -131,7 +137,7 @@ def _prepare_entities(
     labels: Sequence[object] | None,
     timestamps: Sequence[date] | None,
     as_of: date | None,
-) -> tuple[list[str], list[object] | None]:
+) -> tuple[list[str], list[object] | None, list[date] | None]:
     ids = list(entity_ids)
     if len(set(ids)) != len(ids):
         raise ValueError("entity_ids must be unique")
@@ -139,9 +145,13 @@ def _prepare_entities(
         raise ValueError("labels length must match entity_ids length")
 
     if as_of is None:
+        kept_times: list[date] | None
+        kept_times = list(timestamps) if timestamps is not None else None
+        if kept_times is not None and len(kept_times) != len(ids):
+            raise ValueError("timestamps length must match entity_ids length")
         if labels is None:
-            return ids, None
-        return ids, list(labels)
+            return ids, None, kept_times
+        return ids, list(labels), kept_times
 
     if timestamps is None:
         raise ValueError("timestamps are required when split.as_of is set")
@@ -150,15 +160,17 @@ def _prepare_entities(
 
     kept_ids: list[str] = []
     kept_labels: list[object] | None = [] if labels is not None else None
+    filtered_times: list[date] = []
     for index, entity_id in enumerate(ids):
         timestamp = timestamps[index]
         if timestamp is None:
             raise ValueError("timestamp required for each entity when as_of is set")
         if timestamp <= as_of:
             kept_ids.append(entity_id)
+            filtered_times.append(timestamp)
             if kept_labels is not None and labels is not None:
                 kept_labels.append(labels[index])
-    return kept_ids, kept_labels
+    return kept_ids, kept_labels, filtered_times
 
 
 def _holdout_assignment(
@@ -214,12 +226,36 @@ def _stratified_holdout_test_ids(
         by_label[label].append(entity_id)
 
     test_ids: list[str] = []
-    for label_index, grouped_ids in enumerate(by_label.values()):
-        shuffled = list(grouped_ids)
+    for label_index, label in enumerate(sorted(by_label, key=repr)):
+        shuffled = list(by_label[label])
         random.Random(spec.seed + label_index).shuffle(shuffled)
         n_test = _holdout_test_count(len(shuffled), test_size)
         test_ids.extend(shuffled[:n_test])
     return tuple(test_ids)
+
+
+def _temporal_assignment(
+    entity_ids: list[str],
+    timestamps: list[date],
+    spec: SplitSpec,
+) -> SplitAssignment:
+    if spec.test_size is None:
+        raise ValueError("test_size is required for temporal split")
+    if not 0 < spec.test_size < 1:
+        raise ValueError("test_size must be between 0 and 1")
+    ordered = sorted(
+        zip(timestamps, entity_ids, strict=True),
+        key=lambda item: (item[0], item[1]),
+    )
+    ids = [entity_id for _timestamp, entity_id in ordered]
+    if not ids:
+        return SplitAssignment(train_ids=(), validation_ids=(), test_ids=())
+    n_test = _holdout_test_count(len(ids), spec.test_size)
+    return SplitAssignment(
+        train_ids=tuple(ids[:-n_test]),
+        validation_ids=(),
+        test_ids=tuple(ids[-n_test:]),
+    )
 
 
 def _holdout_test_count(n_entities: int, test_size: float) -> int:
@@ -290,8 +326,8 @@ def _stratified_folds(
         by_label[label].append(entity_id)
 
     folds: list[list[str]] = [[] for _ in range(n_splits)]
-    for label_index, grouped_ids in enumerate(by_label.values()):
-        shuffled = list(grouped_ids)
+    for label_index, label in enumerate(sorted(by_label, key=repr)):
+        shuffled = list(by_label[label])
         random.Random(seed + label_index).shuffle(shuffled)
         for index, entity_id in enumerate(shuffled):
             folds[index % n_splits].append(entity_id)

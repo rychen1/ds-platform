@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 
 from ds_platform.modeling.spec import MetricSpec
+from ds_platform.types import FrozenJSON, freeze_json_value
 
 type MetricFn = Callable[[list[object], list[object]], float]
 
@@ -17,10 +18,24 @@ class _FrozenModel(BaseModel):
 
 
 class EvaluationReport(_FrozenModel):
-    metrics: dict[str, float]
+    metrics: Mapping[str, float]
     n: int
     n_missing: int
     notes: tuple[str, ...] = ()
+
+    @field_validator("metrics")
+    @classmethod
+    def _freeze_metrics(cls, metrics: Mapping[str, float]) -> FrozenJSON:
+        for name, value in metrics.items():
+            if isinstance(value, bool) or not isinstance(value, int | float):
+                raise ValueError(f"metric {name!r} must be numeric")
+            if not math.isfinite(float(value)):
+                raise ValueError(f"metric {name!r} must be finite")
+        frozen = freeze_json_value(
+            {name: float(value) for name, value in metrics.items()}
+        )
+        assert isinstance(frozen, FrozenJSON)
+        return frozen
 
 
 def evaluate(
@@ -51,9 +66,8 @@ def evaluate(
         valid_true.append(true_value)
         valid_pred.append(pred_value)
 
-    notes: list[str] = []
     if y_proba is not None:
-        notes.append("y_proba is ignored by built-in metrics in v1")
+        raise ValueError("y_proba is not used by built-in metrics")
 
     computed: dict[str, float] = {}
     for metric in metrics:
@@ -64,8 +78,8 @@ def evaluate(
         except KeyError as exc:
             raise ValueError(f"unknown metric: {metric.name!r}") from exc
         if metric.params:
-            notes.append(
-                f"metric {metric.name!r} params are ignored by built-in metrics"
+            raise ValueError(
+                f"metric {metric.name!r} does not accept params: {dict(metric.params)}"
             )
         computed[metric.name] = metric_fn(valid_true, valid_pred)
 
@@ -73,7 +87,6 @@ def evaluate(
         metrics=computed,
         n=len(y_true),
         n_missing=n_missing,
-        notes=tuple(notes),
     )
 
 
@@ -145,9 +158,9 @@ def _binary_f1(
 
 
 def _as_float(value: object) -> float:
-    if isinstance(value, (int, float)):
-        return float(value)
-    raise TypeError(f"expected numeric value, got {type(value)!r}")
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise TypeError(f"expected numeric value, got {type(value)!r}")
+    return float(value)
 
 
 _METRIC_BY_NAME: dict[str, MetricFn] = {

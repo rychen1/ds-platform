@@ -1,5 +1,7 @@
 from datetime import UTC, datetime
 
+import pytest
+
 from ds_platform.hashing import (
     canonical_json_bytes,
     payload_id,
@@ -38,10 +40,20 @@ def test_canonical_json_omits_nulls_sorts_nested_keys() -> None:
     assert encoded == b'{"a":true,"z":{"b":"x"}}'
 
 
-def test_canonical_json_formats_datetime_as_utc_seconds_z() -> None:
-    instant = datetime(2026, 3, 14, 15, 9, 26, tzinfo=UTC)
+def test_canonical_json_formats_datetime_as_utc_microseconds_z() -> None:
+    instant = datetime(2026, 3, 14, 15, 9, 26, 123456, tzinfo=UTC)
     encoded = canonical_json_bytes({"created_at": instant})
-    assert encoded == b'{"created_at":"2026-03-14T15:09:26Z"}'
+    assert encoded == b'{"created_at":"2026-03-14T15:09:26.123456Z"}'
+
+
+def test_canonical_json_rejects_naive_datetime() -> None:
+    with pytest.raises(TypeError, match="timezone-aware"):
+        canonical_json_bytes({"created_at": datetime(2026, 3, 14, 15, 9, 26)})
+
+
+def test_canonical_json_omits_empty_lists() -> None:
+    encoded = canonical_json_bytes({"a": 1, "inputs": [], "related": []})
+    assert encoded == b'{"a":1}'
 
 
 def test_record_id_from_bytes_matches_sha256() -> None:

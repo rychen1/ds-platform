@@ -1,5 +1,6 @@
 """Reusable DS/ML experimentation contracts for consumer projects."""
 
+from ds_platform.modeling._spec_json import spec_canonical_json_bytes
 from ds_platform.modeling.capabilities import (
     Classifier,
     Clusterer,
@@ -53,6 +54,8 @@ from ds_platform.modeling.records import (
     put_index_artifact,
     put_model_artifact,
     put_prediction_artifact,
+    put_representation_artifact,
+    put_split_assignment,
     representation_payload_bytes,
 )
 from ds_platform.modeling.representations import (
@@ -160,6 +163,8 @@ __all__ = [
     "put_index_artifact",
     "put_model_artifact",
     "put_prediction_artifact",
+    "put_representation_artifact",
+    "put_split_assignment",
     "representation_delta",
     "representation_mse",
     "representation_payload_bytes",
@@ -169,6 +174,7 @@ __all__ = [
     "run_experiment",
     "select_columns",
     "select_entities",
+    "spec_canonical_json_bytes",
     "spec_config_hash",
     "split_entities",
     "split_groups",

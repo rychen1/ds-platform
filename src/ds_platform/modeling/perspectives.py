@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 from typing import Literal
 
@@ -67,6 +68,8 @@ class PerspectiveTable(_FrozenModel):
                 raise ValueError(
                     f"vectors row {row_index} length must match dim {self.dim}"
                 )
+            if any(not math.isfinite(component) for component in vector):
+                raise ValueError(f"vectors row {row_index} must contain finite floats")
         return self
 
 

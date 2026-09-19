@@ -2,17 +2,17 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import Sequence
 from datetime import UTC, datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from ds_platform.hashing import payload_id
+from ds_platform.hashing import format_aware_utc, payload_id
 from ds_platform.modeling._spec_json import spec_canonical_json_bytes
 from ds_platform.modeling.evaluate import EvaluationReport
 from ds_platform.modeling.features import Scalar
 from ds_platform.modeling.representations import RepresentationTable
+from ds_platform.modeling.split import SplitAssignment
 from ds_platform.store import Store, put_record
 from ds_platform.types import (
     ArtifactKind,
@@ -98,6 +98,53 @@ def put_index_artifact(
     )
 
 
+def put_representation_artifact(
+    store: Store,
+    data: bytes,
+    *,
+    run: RunContext,
+    inputs: Sequence[str],
+    media_type: str,
+    logical_key: str | None = None,
+    contract_ref: ContractRef | None = None,
+    created_at: datetime | None = None,
+) -> tuple[str, str]:
+    """Persist representation-table bytes as ``kind=representation``."""
+    return _put_artifact(
+        store,
+        data,
+        kind=ArtifactKind.REPRESENTATION,
+        run=run,
+        inputs=inputs,
+        media_type=media_type,
+        logical_key=logical_key,
+        contract_ref=contract_ref,
+        created_at=created_at,
+    )
+
+
+def put_split_assignment(
+    store: Store,
+    assignment: SplitAssignment,
+    *,
+    run: RunContext,
+    inputs: Sequence[str],
+    logical_key: str | None = None,
+    created_at: datetime | None = None,
+) -> tuple[str, str]:
+    """Persist a split assignment as a ``document`` artifact."""
+    return _put_artifact(
+        store,
+        spec_canonical_json_bytes(assignment),
+        kind=ArtifactKind.DOCUMENT,
+        run=run,
+        inputs=inputs,
+        media_type="application/json",
+        logical_key=logical_key,
+        created_at=created_at,
+    )
+
+
 def put_feature_dataset(
     store: Store,
     data: bytes,
@@ -152,21 +199,12 @@ def prediction_payload_bytes(rows: Sequence[PredictionRow]) -> bytes:
     """Return deterministic UTF-8 JSONL bytes for prediction rows.
 
     Rows are sorted by ``entity_id`` so payload identity does not depend on
-    input order. This is a convenience schema for scalar supervised
-    predictions; callers may pass other bytes to ``put_prediction_artifact``.
+    input order. Floats use spec canonical encoding. This is a convenience
+    schema for scalar supervised predictions; callers may pass other bytes
+    to ``put_prediction_artifact``.
     """
-    encoded_rows = sorted(
-        (
-            json.dumps(
-                row.model_dump(mode="python", exclude_none=True),
-                ensure_ascii=False,
-                separators=(",", ":"),
-                sort_keys=True,
-            )
-            for row in rows
-        ),
-        key=str,
-    )
+    ordered = sorted(rows, key=lambda row: row.entity_id)
+    encoded_rows = [spec_canonical_json_bytes(row).decode("utf-8") for row in ordered]
     if not encoded_rows:
         return b""
     return ("\n".join(encoded_rows) + "\n").encode("utf-8")
@@ -204,12 +242,7 @@ def put_evaluation_artifact(
 
 def evaluation_report_bytes(report: EvaluationReport) -> bytes:
     """Return deterministic UTF-8 JSON bytes for an evaluation report."""
-    return json.dumps(
-        report.model_dump(mode="python", exclude_none=True),
-        ensure_ascii=False,
-        separators=(",", ":"),
-        sort_keys=True,
-    ).encode("utf-8")
+    return spec_canonical_json_bytes(report)
 
 
 def _put_artifact(
@@ -235,14 +268,16 @@ def _put_artifact(
         created_at=_created_at(run, created_at),
         logical_key=logical_key,
         contract_ref=contract_ref,
-        inputs=list(inputs),
-        related=list(related or []),
+        inputs=tuple(inputs),
+        related=tuple(related or ()),
     )
     record_id_value = put_record(store, record)
     return artifact_payload_id, record_id_value
 
 
 def _created_at(run: RunContext, created_at: datetime | None) -> datetime:
-    if created_at is not None:
-        return created_at
-    return run.started_at.astimezone(UTC) if run.started_at.tzinfo else run.started_at
+    instant = created_at if created_at is not None else run.started_at
+    if instant.tzinfo is None:
+        raise ValueError("created_at must be timezone-aware")
+    format_aware_utc(instant)
+    return instant.astimezone(UTC)

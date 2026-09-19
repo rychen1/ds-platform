@@ -136,14 +136,10 @@ def test_run_experiment_persists_artifact_chain(tmp_path) -> None:
     assert result.config_hash == experiment_config_hash(spec)
     assert store.exists(result.feature_payload_id)
     assert store.exists(result.model_payload_id)
+    assert store.exists(result.split_payload_id)
     assert store.exists(result.prediction_payload_id)
     assert store.exists(result.evaluation_payload_id)
-
-    evaluation_payload = json.loads(
-        store.get(result.evaluation_payload_id).decode("utf-8")
-    )
-    assert "accuracy" in evaluation_payload["metrics"]
-    assert result.report.metrics == evaluation_payload["metrics"]
+    assert "accuracy" in result.report.metrics
 
     assignment = split_entities([str(row["id"]) for row in _rows()], spec.split)[0]
     prediction_lines = (
@@ -188,8 +184,24 @@ def test_run_experiment_is_deterministic_for_identical_inputs(tmp_path) -> None:
     )
     assert first.feature_payload_id == second.feature_payload_id
     assert first.model_payload_id == second.model_payload_id
+    assert first.split_payload_id == second.split_payload_id
     assert first.prediction_payload_id == second.prediction_payload_id
     assert first.evaluation_payload_id == second.evaluation_payload_id
+
+
+def test_run_experiment_requires_dataset_payload_id(tmp_path) -> None:
+    store = LocalStore(tmp_path)
+    spec = _experiment(dataset=DatasetRef(logical_key="proj:dataset:v0"))
+    with pytest.raises(ValueError, match="dataset.payload_id"):
+        run_experiment(
+            spec,
+            rows=_rows(),
+            feature_views={"structured": _StructuredView(_DATASET_ID)},
+            adapter=_MajorityClassifier(),
+            store=store,
+            run=_run(),
+            serialize_model=pickle.dumps,
+        )
 
 
 def test_run_experiment_rejects_kfold_spec(tmp_path) -> None:

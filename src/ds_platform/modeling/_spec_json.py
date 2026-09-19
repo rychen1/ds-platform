@@ -1,8 +1,9 @@
 """Private canonical JSON for future modeling experiment specs.
 
 Unlike artifact ``canonical_json_bytes`` in ``ds_platform.hashing``, this
-encoder accepts ``float`` leaves and ``datetime.date`` values so experiment
-configuration can be hashed into ``RunContext.config_hash``.
+encoder accepts ``float`` leaves, timezone-aware datetimes, and
+``datetime.date`` values so experiment configuration can be hashed into
+``RunContext.config_hash``.
 
 Do **not** use this for ``ArtifactRecord`` envelopes. Artifact record
 hashing intentionally rejects floats and remains unchanged.
@@ -26,8 +27,9 @@ or locale, and round-trips the exact float bit pattern.
 
 Date canonicalization
 ---------------------
-``datetime.date`` leaves serialize as ISO 8601 calendar dates:
-``YYYY-MM-DD`` (``date.isoformat()``).
+``datetime.datetime`` leaves use the same injective UTC form as artifact
+records. Naive datetimes are rejected. ``datetime.date`` leaves serialize
+as ISO 8601 calendar dates: ``YYYY-MM-DD``.
 """
 
 from __future__ import annotations
@@ -36,11 +38,13 @@ import json
 import math
 import struct
 from collections.abc import Mapping
-from datetime import date
+from datetime import date, datetime
 from enum import Enum
 from typing import Any
 
 from pydantic import BaseModel
+
+from ds_platform.hashing import format_aware_utc
 
 _SPEC_FLOAT_TAG = "$spec_float"
 
@@ -71,6 +75,8 @@ def spec_canonical_value(value: Any) -> Any:
         return [spec_canonical_value(item) for item in value]
     if isinstance(value, Enum):
         return spec_canonical_value(value.value)
+    if isinstance(value, datetime):
+        return format_aware_utc(value)
     if isinstance(value, date):
         return value.isoformat()
     if isinstance(value, bool):

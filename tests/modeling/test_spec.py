@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import warnings
 from datetime import date
 
 import pytest
@@ -115,9 +116,9 @@ def test_experiment_spec_has_no_retrieval_field() -> None:
     assert "retrieval" not in ExperimentSpec.model_fields
 
 
-def test_spec_config_hash_matches_experiment_config_hash() -> None:
+def test_spec_config_hash_includes_experiment_id() -> None:
     spec = _experiment()
-    assert spec_config_hash(spec) == experiment_config_hash(spec)
+    assert spec_config_hash(spec) != experiment_config_hash(spec)
 
 
 def test_encoding_spec_hash_is_stable() -> None:
@@ -142,15 +143,37 @@ def test_experiment_config_hash_changes_when_spec_changes() -> None:
 
 def test_experiment_config_hash_uses_spec_canonical_json_bytes() -> None:
     spec = _experiment()
-    expected = sha256_hex(spec_canonical_json_bytes(spec))
+    payload = spec.model_dump(mode="python", exclude_none=True)
+    payload.pop("experiment_id")
+    expected = sha256_hex(spec_canonical_json_bytes(payload))
     assert experiment_config_hash(spec) == expected
+
+
+def test_experiment_config_hash_ignores_experiment_id() -> None:
+    left = _experiment(experiment_id="exp-a")
+    right = _experiment(experiment_id="exp-b")
+    assert experiment_config_hash(left) == experiment_config_hash(right)
 
 
 def test_experiment_config_hash_encodes_float_params_deterministically() -> None:
     spec = _experiment(model=ModelSpec(family="baseline", params={"weight": 1.25}))
     encoded = spec_canonical_json_bytes(spec).decode("utf-8")
     assert '"$spec_float"' in encoded
-    assert experiment_config_hash(spec) == sha256_hex(spec_canonical_json_bytes(spec))
+    payload = spec.model_dump(mode="python", exclude_none=True)
+    payload.pop("experiment_id")
+    digest = sha256_hex(spec_canonical_json_bytes(payload))
+    assert experiment_config_hash(spec) == digest
+
+
+def test_model_spec_params_lists_dump_without_warning() -> None:
+    spec = ModelSpec(family="baseline", params={"ks": [1, 3]})
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        dumped = spec.model_dump(mode="python")
+    assert dumped["params"]["ks"] == [1, 3]
+    assert not [
+        item for item in caught if "Pydantic serializer warnings" in str(item.message)
+    ]
 
 
 def test_experiment_config_hash_encodes_dates_as_iso() -> None:

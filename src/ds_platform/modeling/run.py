@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import Callable, Mapping, Sequence
 from typing import cast, get_args, get_origin, get_type_hints
 
 from pydantic import BaseModel, ConfigDict
 
+from ds_platform.modeling._spec_json import spec_canonical_json_bytes
 from ds_platform.modeling.capabilities import Classifier, Regressor
 from ds_platform.modeling.evaluate import EvaluationReport, evaluate
 from ds_platform.modeling.features import (
@@ -25,6 +25,7 @@ from ds_platform.modeling.records import (
     put_feature_dataset,
     put_model_artifact,
     put_prediction_artifact,
+    put_split_assignment,
 )
 from ds_platform.modeling.spec import ExperimentSpec, experiment_config_hash
 from ds_platform.modeling.split import apply_split, split_entities
@@ -41,6 +42,7 @@ class ExperimentResult(_FrozenModel):
     config_hash: str
     feature_payload_id: str
     model_payload_id: str
+    split_payload_id: str
     prediction_payload_id: str
     evaluation_payload_id: str
     report: EvaluationReport
@@ -65,6 +67,8 @@ def run_experiment(
     """
     if spec.split.method != "holdout":
         raise ValueError("run_experiment v1 requires split.method == 'holdout'")
+    if spec.dataset.payload_id is None:
+        raise ValueError("run_experiment requires dataset.payload_id for lineage")
 
     config_hash = experiment_config_hash(spec)
     run_with_hash = run.model_copy(update={"config_hash": config_hash})
@@ -94,11 +98,17 @@ def run_experiment(
         inputs=feature_inputs,
         media_type="application/json",
     )
+    split_payload_id, _split_record_id = put_split_assignment(
+        store,
+        assignment,
+        run=run_with_hash,
+        inputs=[feature_payload_id, *feature_inputs],
+    )
     model_payload_id, _model_record_id = put_model_artifact(
         store,
         fitted_model,
         run=run_with_hash,
-        inputs=[feature_payload_id, *feature_inputs],
+        inputs=[feature_payload_id, split_payload_id, *feature_inputs],
         media_type=model_media_type,
     )
 
@@ -114,7 +124,7 @@ def run_experiment(
         store,
         prediction_bytes,
         run=run_with_hash,
-        inputs=[model_payload_id, feature_payload_id],
+        inputs=[model_payload_id, feature_payload_id, split_payload_id],
         media_type="application/jsonl",
     )
 
@@ -122,14 +132,18 @@ def run_experiment(
         test_labels,
         list(test_predictions),
         spec.metrics,
-        y_proba=_maybe_predict_proba(adapter, test_features),
     )
     evaluation_payload_id, _evaluation_record_id = put_evaluation_artifact(
         store,
         report,
         run=run_with_hash,
         subject_payload_id=prediction_payload_id,
-        inputs=[prediction_payload_id, feature_payload_id],
+        inputs=[
+            prediction_payload_id,
+            model_payload_id,
+            feature_payload_id,
+            split_payload_id,
+        ],
     )
 
     return ExperimentResult(
@@ -137,6 +151,7 @@ def run_experiment(
         config_hash=config_hash,
         feature_payload_id=feature_payload_id,
         model_payload_id=model_payload_id,
+        split_payload_id=split_payload_id,
         prediction_payload_id=prediction_payload_id,
         evaluation_payload_id=evaluation_payload_id,
         report=report,
@@ -229,15 +244,15 @@ def _labels_for_entities(
 
 
 def _classification_label(value: Scalar) -> str | int:
-    if isinstance(value, str | int):
-        return value
-    raise TypeError(f"classification label must be str or int, got {value!r}")
+    if isinstance(value, bool) or not isinstance(value, str | int):
+        raise TypeError(f"classification label must be str or int, got {value!r}")
+    return value
 
 
 def _regression_label(value: Scalar) -> float:
-    if isinstance(value, int | float):
-        return float(value)
-    raise TypeError(f"regression label must be numeric, got {value!r}")
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise TypeError(f"regression label must be numeric, got {value!r}")
+    return float(value)
 
 
 def _prediction_rows(
@@ -281,15 +296,4 @@ def _dataset_inputs(spec: ExperimentSpec) -> list[str]:
 
 
 def _feature_table_bytes(table: FeatureTable) -> bytes:
-    payload = {
-        "entity_ids": list(table.entity_ids),
-        "columns": list(table.columns),
-        "values": [list(row) for row in table.values],
-        "source_payload_ids": list(table.source_payload_ids),
-    }
-    return json.dumps(
-        payload,
-        ensure_ascii=False,
-        separators=(",", ":"),
-        sort_keys=True,
-    ).encode("utf-8")
+    return spec_canonical_json_bytes(table)
