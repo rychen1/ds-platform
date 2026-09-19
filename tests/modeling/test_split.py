@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 import sys
 from datetime import date
 
@@ -9,7 +10,12 @@ import pytest
 
 from ds_platform.modeling.features import FeatureTable
 from ds_platform.modeling.spec import SplitSpec
-from ds_platform.modeling.split import SplitAssignment, apply_split, split_entities
+from ds_platform.modeling.split import (
+    SplitAssignment,
+    apply_split,
+    split_entities,
+    split_groups,
+)
 
 _FORBIDDEN = {
     "board_game_analysis",
@@ -149,6 +155,37 @@ def test_apply_split_preserves_columns_and_sources() -> None:
     assert validation.entity_ids == ()
     assert test.entity_ids == ("e2", "e4")
     assert test.values == ((3, 4), (7, 8))
+
+
+def test_split_groups_holdout_is_order_invariant() -> None:
+    spec = _holdout_spec(seed=0, test_size=1 / 3)
+    forward = split_groups(["a", "a", "b", "b", "c", "c"], spec)[0]
+    reverse = split_groups(list(reversed(["a", "a", "b", "b", "c", "c"])), spec)[0]
+    shuffled = split_groups(["c", "a", "b", "c", "a", "b"], spec)[0]
+    assert set(forward.train_ids) == set(reverse.train_ids) == set(shuffled.train_ids)
+    assert set(forward.test_ids) == set(reverse.test_ids) == set(shuffled.test_ids)
+
+
+def test_split_groups_is_stable_under_python_hash_seed() -> None:
+    script = """
+from ds_platform.modeling.spec import SplitSpec
+from ds_platform.modeling.split import split_groups
+
+spec = SplitSpec(method="holdout", seed=0, test_size=0.3)
+assignment = split_groups(["a", "a", "b", "b", "c", "c"], spec)[0]
+print(",".join(sorted(assignment.train_ids)))
+"""
+    import os
+
+    outputs = {
+        subprocess.check_output(
+            [sys.executable, "-c", script],
+            env={**os.environ, "PYTHONHASHSEED": seed},
+            text=True,
+        ).strip()
+        for seed in ("0", "1", "424242")
+    }
+    assert len(set(outputs)) == 1
 
 
 def test_split_import_does_not_load_forbidden_modules() -> None:

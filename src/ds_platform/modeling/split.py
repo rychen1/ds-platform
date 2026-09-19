@@ -70,12 +70,15 @@ def split_groups(
     labels: Sequence[object] | None = None,
     timestamps: Sequence[date] | None = None,
 ) -> tuple[SplitAssignment, ...]:
-    """Split unique group ids, preserving first-seen order.
+    """Split unique group ids with canonical ordering.
 
     Duplicate group ids are dropped after the first occurrence. When
     ``labels`` or ``timestamps`` are provided they align to the input
     ``group_ids`` sequence; values from the first occurrence of each
-    group are kept. Returned assignment ids are group ids.
+    group are kept. Unique groups are sorted lexicographically before
+    holdout or k-fold selection so incidental input order does not change
+    train/test assignment for the same seed. Returned assignment ids are
+    group ids.
     """
     unique_ids: list[str] = []
     unique_labels: list[object] | None = [] if labels is not None else None
@@ -94,6 +97,12 @@ def split_groups(
             unique_labels.append(labels[index])
         if unique_timestamps is not None and timestamps is not None:
             unique_timestamps.append(timestamps[index])
+    order = sorted(range(len(unique_ids)), key=lambda index: unique_ids[index])
+    unique_ids = [unique_ids[index] for index in order]
+    if unique_labels is not None:
+        unique_labels = [unique_labels[index] for index in order]
+    if unique_timestamps is not None:
+        unique_timestamps = [unique_timestamps[index] for index in order]
     return split_entities(
         unique_ids,
         spec,
