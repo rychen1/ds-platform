@@ -1,0 +1,349 @@
+{
+  "$defs": {
+    "ArtifactKind": {
+      "enum": [
+        "raw",
+        "dataset",
+        "document",
+        "model",
+        "prompt",
+        "prediction",
+        "evaluation",
+        "quality",
+        "claim_set",
+        "review",
+        "run",
+        "index"
+      ],
+      "title": "ArtifactKind",
+      "type": "string"
+    },
+    "CodeRef": {
+      "additionalProperties": false,
+      "properties": {
+        "dirty": {
+          "title": "Dirty",
+          "type": "boolean"
+        },
+        "git_sha": {
+          "minLength": 1,
+          "title": "Git Sha",
+          "type": "string"
+        }
+      },
+      "required": [
+        "git_sha",
+        "dirty"
+      ],
+      "title": "CodeRef",
+      "type": "object"
+    },
+    "ContractRef": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_hash": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Schema Hash",
+          "type": "string"
+        },
+        "uri": {
+          "minLength": 1,
+          "title": "Uri",
+          "type": "string"
+        }
+      },
+      "required": [
+        "uri",
+        "schema_hash"
+      ],
+      "title": "ContractRef",
+      "type": "object"
+    },
+    "Environment": {
+      "enum": [
+        "local",
+        "ci",
+        "cloud"
+      ],
+      "title": "Environment",
+      "type": "string"
+    },
+    "ExternalRunIds": {
+      "additionalProperties": false,
+      "properties": {
+        "dagster": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Dagster"
+        },
+        "mlflow": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mlflow"
+        },
+        "otel_trace": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Otel Trace"
+        },
+        "sqlmesh": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sqlmesh"
+        }
+      },
+      "title": "ExternalRunIds",
+      "type": "object"
+    },
+    "RelatedRef": {
+      "additionalProperties": false,
+      "properties": {
+        "payload_id": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Payload Id",
+          "type": "string"
+        },
+        "record_id": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Record Id"
+        },
+        "rel": {
+          "$ref": "#/$defs/RelationType"
+        }
+      },
+      "required": [
+        "rel",
+        "payload_id"
+      ],
+      "title": "RelatedRef",
+      "type": "object"
+    },
+    "RelationType": {
+      "enum": [
+        "quality_for",
+        "evaluation_of",
+        "claims_about",
+        "reviews",
+        "champion_of"
+      ],
+      "title": "RelationType",
+      "type": "string"
+    },
+    "RunContext": {
+      "additionalProperties": false,
+      "properties": {
+        "code_ref": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CodeRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "completed_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Completed At"
+        },
+        "config_hash": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Config Hash"
+        },
+        "environment": {
+          "$ref": "#/$defs/Environment"
+        },
+        "external_run_ids": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExternalRunIds"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "project": {
+          "minLength": 1,
+          "title": "Project",
+          "type": "string"
+        },
+        "run_id": {
+          "minLength": 1,
+          "title": "Run Id",
+          "type": "string"
+        },
+        "started_at": {
+          "format": "date-time",
+          "title": "Started At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "project",
+        "started_at",
+        "environment"
+      ],
+      "title": "RunContext",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "contract_ref": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ContractRef"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "derived_from": {
+      "items": {
+        "pattern": "^[a-f0-9]{64}$",
+        "type": "string"
+      },
+      "title": "Derived From",
+      "type": "array"
+    },
+    "inherited_policy_refs": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Inherited Policy Refs",
+      "type": "array"
+    },
+    "inputs": {
+      "items": {
+        "pattern": "^[a-f0-9]{64}$",
+        "type": "string"
+      },
+      "title": "Inputs",
+      "type": "array"
+    },
+    "kind": {
+      "$ref": "#/$defs/ArtifactKind"
+    },
+    "logical_key": {
+      "anyOf": [
+        {
+          "pattern": "^[a-z][a-z0-9-]{0,31}:[a-z][a-z0-9._/-]{0,127}(?::[a-z0-9][a-z0-9._-]{0,63})?$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Logical Key"
+    },
+    "media_type": {
+      "pattern": "^[a-z][a-z0-9!#$&^_.+-]*/[a-z0-9][a-z0-9!#$&^_.+-]*$",
+      "title": "Media Type",
+      "type": "string"
+    },
+    "name": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Name"
+    },
+    "payload_id": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Payload Id",
+      "type": "string"
+    },
+    "produced_by": {
+      "$ref": "#/$defs/RunContext"
+    },
+    "related": {
+      "items": {
+        "$ref": "#/$defs/RelatedRef"
+      },
+      "title": "Related",
+      "type": "array"
+    }
+  },
+  "required": [
+    "payload_id",
+    "media_type",
+    "kind",
+    "produced_by",
+    "created_at"
+  ],
+  "title": "ArtifactRecord",
+  "type": "object"
+}

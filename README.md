@@ -9,9 +9,10 @@ AWS remain external.
 
 ## Status
 
-Pre-alpha. The package exists so the architecture can live in a dedicated
-repository. Implementation of identity, envelopes, stores, and integrations
-has **not** started.
+Pre-alpha. The first slice is implemented: canonical identity hashing, core
+record types, a local content-addressed store, and envelope JSON Schema.
+Architecture remains the source of truth for what comes next. Integrations
+have **not** started.
 
 Read [docs/architecture.md](docs/architecture.md) before writing code. That
 document is the current source of truth: independent design, critical
@@ -42,14 +43,21 @@ Intended first consumers (not connected yet):
 
 ## Development
 
-Requires Python 3.13+ and [uv](https://docs.astral.sh/uv/).
+Requires Python 3.13+ and [uv](https://docs.astral.sh/uv/). The runtime
+target is a single Python version (see `.python-version`). CI installs from
+the lockfile.
 
 ```bash
-uv sync --group dev
-uv run pytest
+uv sync --locked --group dev
 uv run ruff check src tests
-uv run pyright
+uv run ruff format --check src tests
+uv run pyright          # typecheck (current); later swap: uv run ty check
+uv run pytest
 ```
+
+Do not add a second type checker in parallel. Pyright is the current
+implementation of the type-checking contract, not an architectural
+dependency.
 
 ## License
 

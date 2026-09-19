@@ -4,5 +4,5 @@
 | --- | --- |
 | [architecture.md](architecture.md) | Independent architecture, critical review, freeze set |
 
-Implementation of the platform has not started. The architecture document is
-the current source of truth for what should be built next.
+The first slice (identity, types, LocalStore) is implemented. The architecture
+document remains the source of truth for subsequent work.
