@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import sys
 from collections.abc import Sequence
 
 import pytest
@@ -15,6 +14,7 @@ from ds_platform.modeling.representations import (
     as_feature_table,
 )
 from ds_platform.modeling.spec import ConditioningSpec, spec_config_hash
+from import_boundary_util import assert_import_does_not_pull
 
 _FORBIDDEN = {
     "Action",
@@ -171,7 +171,7 @@ def test_conditioning_spec_hash_is_stable() -> None:
 
 
 def test_pairs_import_does_not_load_forbidden_modules() -> None:
+    assert_import_does_not_pull("ds_platform.modeling.pairs", _FORBIDDEN)
     import ds_platform.modeling.pairs as pairs
 
-    assert _FORBIDDEN.intersection(sys.modules) == set()
     assert "Action" not in dir(pairs)

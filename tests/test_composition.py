@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -24,6 +23,7 @@ from ds_platform import (
     record_id,
     sha256_hex,
 )
+from import_boundary_util import assert_import_does_not_pull
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 SCHEMA_PATH = FIXTURES / "example_cafe.schema.json"
@@ -178,8 +178,6 @@ def test_put_record_round_trips_canonical_bytes(tmp_path: Path) -> None:
 
 
 def test_composition_import_graph_has_no_vendor_stack() -> None:
-    import ds_platform.modeling  # noqa: F401
-
     forbidden = {
         "boto3",
         "board_game_analysis",
@@ -196,4 +194,4 @@ def test_composition_import_graph_has_no_vendor_stack() -> None:
         "sqlmesh",
         "streamlit",
     }
-    assert forbidden.intersection(sys.modules) == set()
+    assert_import_does_not_pull("ds_platform.modeling", forbidden)

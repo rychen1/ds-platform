@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pickle
-import sys
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 
@@ -23,6 +22,7 @@ from ds_platform.modeling.representations import (
     select_entities,
 )
 from ds_platform.modeling.spec import EncodingSpec, spec_config_hash
+from import_boundary_util import assert_import_does_not_pull
 
 _FORBIDDEN = {
     "board_game_analysis",
@@ -179,6 +179,4 @@ def test_run_encoding_persists_model_and_dataset(tmp_path) -> None:
 
 
 def test_representations_import_does_not_load_forbidden_modules() -> None:
-    import ds_platform.modeling.representations  # noqa: F401
-
-    assert _FORBIDDEN.intersection(sys.modules) == set()
+    assert_import_does_not_pull("ds_platform.modeling.representations", _FORBIDDEN)

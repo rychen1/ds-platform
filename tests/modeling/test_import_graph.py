@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import struct
-import sys
 from datetime import date
 
 import pytest
@@ -14,6 +13,7 @@ from ds_platform.modeling._spec_json import (
     spec_canonical_json_bytes,
     spec_canonical_value,
 )
+from import_boundary_util import assert_import_does_not_pull
 
 _FORBIDDEN_VENDORS = {
     "boto3",
@@ -75,6 +75,12 @@ def test_modeling_public_exports_are_importable() -> None:
         assert hasattr(modeling, name), f"missing export: {name!r}"
 
 
+def test_spec_canonical_json_bytes_is_public() -> None:
+    from ds_platform.modeling import spec_canonical_json_bytes as public_fn
+
+    assert public_fn is spec_canonical_json_bytes
+
+
 def test_modeling_public_exports_exclude_deferred_names() -> None:
     import ds_platform.modeling as modeling
 
@@ -82,10 +88,10 @@ def test_modeling_public_exports_exclude_deferred_names() -> None:
 
 
 def test_modeling_import_does_not_load_forbidden_modules() -> None:
-    import ds_platform.modeling  # noqa: F401
-
-    loaded = _FORBIDDEN_VENDORS | _FORBIDDEN_CONSUMERS
-    assert loaded.intersection(sys.modules) == set()
+    assert_import_does_not_pull(
+        "ds_platform.modeling",
+        _FORBIDDEN_VENDORS | _FORBIDDEN_CONSUMERS,
+    )
 
 
 def test_spec_canonical_json_is_deterministic() -> None:

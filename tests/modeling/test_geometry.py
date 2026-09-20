@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import sys
 from datetime import UTC, datetime
 
 import pytest
@@ -13,6 +12,7 @@ from ds_platform.modeling.geometry import knn, novelty_scores, pairwise_distance
 from ds_platform.modeling.records import put_index_artifact
 from ds_platform.modeling.representations import RepresentationTable
 from ds_platform.modeling.spec import GeometrySpec, spec_config_hash
+from import_boundary_util import assert_import_does_not_pull
 
 _FORBIDDEN = {
     "board_game_analysis",
@@ -115,6 +115,4 @@ def test_geometry_spec_hash() -> None:
 
 
 def test_geometry_import_does_not_load_forbidden_modules() -> None:
-    import ds_platform.modeling.geometry  # noqa: F401
-
-    assert _FORBIDDEN.intersection(sys.modules) == set()
+    assert_import_does_not_pull("ds_platform.modeling.geometry", _FORBIDDEN)

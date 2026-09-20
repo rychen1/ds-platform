@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import sys
 import warnings
 from datetime import date
 
@@ -15,6 +14,7 @@ from ds_platform.modeling.spec import (
     DatasetRef,
     EncodingSpec,
     ExperimentSpec,
+    FeatureSchema,
     FeatureSpec,
     MetricSpec,
     ModelSpec,
@@ -23,6 +23,7 @@ from ds_platform.modeling.spec import (
     experiment_config_hash,
     spec_config_hash,
 )
+from import_boundary_util import assert_import_does_not_pull
 
 _FORBIDDEN = {
     "board_game_analysis",
@@ -185,6 +186,38 @@ def test_experiment_config_hash_encodes_dates_as_iso() -> None:
 
 
 def test_spec_import_does_not_load_forbidden_modules() -> None:
-    import ds_platform.modeling.spec  # noqa: F401
+    assert_import_does_not_pull("ds_platform.modeling.spec", _FORBIDDEN)
 
-    assert _FORBIDDEN.intersection(sys.modules) == set()
+
+def test_feature_schema_hash_changes_when_kind_changes() -> None:
+    first = FeatureSchema(columns=("borough", "lat"), kinds=("categorical", "numeric"))
+    second = FeatureSchema(columns=("borough", "lat"), kinds=("passthrough", "numeric"))
+    assert spec_config_hash(first) != spec_config_hash(second)
+    assert spec_config_hash(first) == spec_config_hash(
+        FeatureSchema(columns=("borough", "lat"), kinds=("categorical", "numeric"))
+    )
+
+
+def test_feature_schema_rejects_length_mismatch_and_duplicates() -> None:
+    with pytest.raises(ValidationError, match="kinds length"):
+        FeatureSchema(columns=("a", "b"), kinds=("numeric",))
+    with pytest.raises(ValidationError, match="columns must be unique"):
+        FeatureSchema(columns=("a", "a"), kinds=("numeric", "categorical"))
+
+
+def test_split_spec_rejects_validation_size_out_of_range() -> None:
+    with pytest.raises(ValidationError, match="validation_size must be between"):
+        SplitSpec(method="holdout", seed=1, test_size=0.2, validation_size=1.0)
+
+
+def test_split_spec_rejects_sizes_that_leave_no_train() -> None:
+    with pytest.raises(ValidationError, match="must be less than 1"):
+        SplitSpec(method="holdout", seed=1, test_size=0.5, validation_size=0.5)
+
+
+def test_experiment_config_hash_includes_validation_size() -> None:
+    base = _experiment()
+    with_validation = _experiment(
+        split=SplitSpec(method="holdout", seed=42, test_size=0.2, validation_size=0.2)
+    )
+    assert experiment_config_hash(base) != experiment_config_hash(with_validation)

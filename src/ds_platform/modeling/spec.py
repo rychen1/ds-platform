@@ -61,20 +61,56 @@ class ModelSpec(_FrozenModel):
         return freeze_json_value(dict(params))
 
 
+type FeatureKind = Literal["numeric", "categorical", "text", "passthrough"]
+
+
+class FeatureSchema(_FrozenModel):
+    """Hashable column-kind metadata. Not attached to ``FeatureTable`` cells."""
+
+    columns: tuple[str, ...]
+    kinds: tuple[FeatureKind, ...]
+
+    @model_validator(mode="after")
+    def _aligned_unique_columns(self) -> FeatureSchema:
+        if len(self.columns) != len(self.kinds):
+            raise ValueError("kinds length must match columns length")
+        if len(set(self.columns)) != len(self.columns):
+            raise ValueError("columns must be unique")
+        return self
+
+
 class SplitSpec(_FrozenModel):
-    """Train/test assignment configuration.
+    """Train/validation/test assignment configuration.
 
     ``as_of`` drops entities with ``timestamp > as_of`` before splitting.
     It is not a temporal cut: use ``method="temporal"`` to put later
     remaining entities in test.
+
+    ``test_size`` and ``validation_size`` are fractions of the kept entity
+    set. When ``validation_size`` is set, holdout and temporal splits
+    populate ``validation_ids``. K-fold does not support
+    ``validation_size``.
     """
 
     method: Literal["holdout", "kfold", "temporal"]
     seed: int
     test_size: float | None = None
+    validation_size: float | None = None
     n_splits: int | None = None
     stratify: bool = False
     as_of: date | None = None
+
+    @model_validator(mode="after")
+    def _validate_sizes(self) -> SplitSpec:
+        if self.validation_size is None:
+            return self
+        if self.method == "kfold":
+            raise ValueError("kfold split does not support validation_size")
+        if not 0 < self.validation_size < 1:
+            raise ValueError("validation_size must be between 0 and 1")
+        if self.test_size is not None and self.test_size + self.validation_size >= 1:
+            raise ValueError("test_size + validation_size must be less than 1")
+        return self
 
 
 class MetricSpec(_FrozenModel):

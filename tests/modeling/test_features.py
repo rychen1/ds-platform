@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import sys
 from datetime import date
 
 import pytest
@@ -16,6 +15,7 @@ from ds_platform.modeling.features import (
     extract_column,
     select_columns,
 )
+from import_boundary_util import assert_import_does_not_pull
 
 _FORBIDDEN = {
     "board_game_analysis",
@@ -285,6 +285,4 @@ def test_align_feature_tables_rejects_unsupported_how() -> None:
 
 
 def test_features_import_does_not_load_forbidden_modules() -> None:
-    import ds_platform.modeling.features  # noqa: F401
-
-    assert _FORBIDDEN.intersection(sys.modules) == set()
+    assert_import_does_not_pull("ds_platform.modeling.features", _FORBIDDEN)

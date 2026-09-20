@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-import sys
-
 from ds_platform.modeling.capabilities import Classifier, Regressor
 from ds_platform.modeling.features import FeatureTable
+from import_boundary_util import assert_import_does_not_pull
 
 _FORBIDDEN = {
     "board_game_analysis",
@@ -46,6 +45,4 @@ def test_dummy_regressor_satisfies_protocol() -> None:
 
 
 def test_capabilities_import_does_not_load_forbidden_modules() -> None:
-    import ds_platform.modeling.capabilities  # noqa: F401
-
-    assert _FORBIDDEN.intersection(sys.modules) == set()
+    assert_import_does_not_pull("ds_platform.modeling.capabilities", _FORBIDDEN)

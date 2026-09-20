@@ -153,15 +153,18 @@ def test_run_encoding_uses_representation_kind(tmp_path: Path) -> None:
     assert record["kind"] == ArtifactKind.REPRESENTATION
 
 
-def test_evaluate_rejects_metric_params_and_probabilities() -> None:
+def test_evaluate_rejects_metric_params_and_missing_probabilities() -> None:
     with pytest.raises(ValueError, match="does not accept params"):
         evaluate(
             ["A"],
             ["A"],
             [MetricSpec(name="accuracy", params={"average": "weighted"})],
         )
-    with pytest.raises(ValueError, match="y_proba is not used"):
-        evaluate(["A"], ["A"], [MetricSpec(name="accuracy")], y_proba=[[1.0]])
+    report = evaluate(["A"], ["A"], [MetricSpec(name="accuracy")], y_proba=[[1.0]])
+    assert report.metrics["accuracy"] == 1.0
+    assert report.notes == ()
+    with pytest.raises(ValueError, match="requires y_proba"):
+        evaluate(["A"], ["A"], [MetricSpec(name="log_loss")])
 
 
 def test_evaluation_report_rejects_nan() -> None:
@@ -472,9 +475,7 @@ def test_self_referential_related_ref_rejected() -> None:
     from ds_platform.types import RelatedRef, RelationType
 
     with pytest.raises(ValidationError, match="payload_id"):
-        _record(
-            related=(RelatedRef(rel=RelationType.CLAIMS_ABOUT, payload_id=_PID),)
-        )
+        _record(related=(RelatedRef(rel=RelationType.CLAIMS_ABOUT, payload_id=_PID),))
 
 
 def test_kfold_assignments_have_empty_validation_ids() -> None:

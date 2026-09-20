@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import sys
 from collections.abc import Sequence
 from datetime import UTC, datetime
 
@@ -24,6 +23,7 @@ from ds_platform.modeling.records import (
 )
 from ds_platform.modeling.representations import RepresentationTable, representation_mse
 from ds_platform.modeling.sequences import SequenceTable
+from import_boundary_util import assert_import_does_not_pull
 
 _FORBIDDEN = {
     "GameTree",
@@ -181,6 +181,4 @@ def test_interventions_have_no_environment_api() -> None:
 
 
 def test_interventions_import_does_not_load_forbidden_modules() -> None:
-    import ds_platform.modeling.interventions  # noqa: F401
-
-    assert _FORBIDDEN.intersection(sys.modules) == set()
+    assert_import_does_not_pull("ds_platform.modeling.interventions", _FORBIDDEN)

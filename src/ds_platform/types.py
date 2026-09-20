@@ -214,9 +214,7 @@ class ArtifactRecord(_CoreModel):
             raise ValueError("inputs must not contain duplicates")
         for ref in self.related:
             if ref.payload_id == self.payload_id:
-                raise ValueError(
-                    "related must not reference this record's payload_id"
-                )
+                raise ValueError("related must not reference this record's payload_id")
         return self
 
 

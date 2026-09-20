@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import pickle
-import sys
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
@@ -31,6 +30,7 @@ from ds_platform.modeling import (
     experiment_config_hash,
     run_experiment,
 )
+from import_boundary_util import assert_import_does_not_pull
 
 _FORBIDDEN = {
     "board_game_analysis",
@@ -236,6 +236,4 @@ def test_public_modeling_lifecycle_with_two_views(tmp_path) -> None:
 
 
 def test_public_import_does_not_load_forbidden_modules() -> None:
-    import ds_platform.modeling  # noqa: F401
-
-    assert _FORBIDDEN.intersection(sys.modules) == set()
+    assert_import_does_not_pull("ds_platform.modeling", _FORBIDDEN)

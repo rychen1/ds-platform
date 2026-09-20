@@ -1,7 +1,9 @@
 # Modeling architecture plan v1
 
 **Status: v1 implemented; representation/sequence/geometry foundation
-implemented; retrieval/RAG still proposed.**
+implemented; probability-aware evaluation implemented; leakage-safe
+transforms and three-way splits implemented; cross-validation aggregation
+and model comparison implemented; retrieval/RAG still proposed.**
 
 This document describes the approved architecture for reusable DS/ML
 experimentation contracts in `ds-platform` and records what is implemented
@@ -21,7 +23,7 @@ unchanged.
 
 **Still proposed / not implemented:** `retrieval.py`, RAG types
 (`Retriever`, `RetrievedItem`, `filter_temporal`, …), MCP/`Tool`, vendor
-adapter extras, k-fold in `run_experiment`, and consumer-project adoption.
+adapter extras, and consumer-project adoption.
 
 Read [architecture.md](architecture.md) for the artifact freeze set. This
 document extends that freeze with the modeling contract layer.
@@ -168,6 +170,7 @@ src/ds_platform/
     ├── records.py
     ├── run.py
     ├── encode.py
+    ├── transforms.py
     └── retrieval.py            # NOT IMPLEMENTED — still proposed
 ```
 
@@ -202,33 +205,40 @@ on `RunContext.config_hash`.
 
 ```python
 class DatasetRef:
-    payload_id: str | None = None      # sha256 hex of dataset bytes
-    logical_key: str | None = None     # at least one field required
+    payload_id: str | None = None  # sha256 hex of dataset bytes
+    logical_key: str | None = None  # at least one field required
+
 
 class FeatureSpec:
-    views: tuple[str, ...]             # FeatureView.name values
-    columns: tuple[str, ...] | None    # optional allowlist after align
-    as_of: date | None                 # passed through to views
+    views: tuple[str, ...]  # FeatureView.name values
+    columns: tuple[str, ...] | None  # optional allowlist after align
+    as_of: date | None  # passed through to views
+
 
 class TargetSpec:
     column: str
     task: Literal["classification", "regression"]
 
+
 class ModelSpec:
-    family: str                        # opaque label for the hash, not a lookup key
-    params: dict[str, JsonValue]       # JSON-serializable only
+    family: str  # opaque label for the hash, not a lookup key
+    params: dict[str, JsonValue]  # JSON-serializable only
+
 
 class SplitSpec:
-    method: Literal["holdout", "kfold"]
+    method: Literal["holdout", "kfold", "temporal"]
     seed: int
-    test_size: float | None            # holdout
-    n_splits: int | None               # kfold
+    test_size: float | None  # holdout / temporal
+    validation_size: float | None  # holdout / temporal three-way
+    n_splits: int | None  # kfold
     stratify: bool = False
     as_of: date | None
 
+
 class MetricSpec:
-    name: str                          # e.g. "accuracy", "rmse"
+    name: str  # e.g. "accuracy", "rmse"
     params: dict[str, JsonValue]
+
 
 class RetrievalSpec:
     corpus_payload_ids: tuple[str, ...]
@@ -237,6 +247,7 @@ class RetrievalSpec:
     prompt_payload_id: str | None
     hybrid: bool = False
     as_of: date | None
+
 
 class ExperimentSpec:
     experiment_id: str
@@ -247,7 +258,8 @@ class ExperimentSpec:
     split: SplitSpec
     metrics: tuple[MetricSpec, ...]
     seed: int
-    retrieval: RetrievalSpec | None = None   # hashed when present
+    retrieval: RetrievalSpec | None = None  # hashed when present
+
 
 def experiment_config_hash(spec: ExperimentSpec) -> str: ...
 ```
@@ -269,6 +281,7 @@ def experiment_config_hash(spec: ExperimentSpec) -> str: ...
 class Classifier(Protocol):
     def fit(self, features: FeatureTable, y: Sequence[str | int]) -> None: ...
     def predict(self, features: FeatureTable) -> Sequence[str | int]: ...
+
 
 class Regressor(Protocol):
     def fit(self, features: FeatureTable, y: Sequence[float]) -> None: ...
@@ -297,11 +310,13 @@ store.
 ```python
 type Scalar = str | int | float | bool | None
 
+
 class FeatureTable:
     entity_ids: tuple[str, ...]
     columns: tuple[str, ...]
-    values: tuple[tuple[Scalar, ...], ...]   # rows aligned to entity_ids
+    values: tuple[tuple[Scalar, ...], ...]  # rows aligned to entity_ids
     source_payload_ids: tuple[str, ...]
+
 
 class FeatureView(Protocol):
     @property
@@ -313,11 +328,13 @@ class FeatureView(Protocol):
         as_of: date | None = None,
     ) -> FeatureTable: ...
 
+
 def align_feature_tables(
     tables: Sequence[FeatureTable],
     *,
     how: Literal["inner"] = "inner",
 ) -> FeatureTable: ...
+
 
 def select_columns(table: FeatureTable, columns: Sequence[str]) -> FeatureTable: ...
 def extract_column(table: FeatureTable, column: str) -> tuple[Scalar, ...]: ...
@@ -340,7 +357,7 @@ one entity has many observations.
 ```python
 class SplitAssignment:
     train_ids: tuple[str, ...]
-    validation_ids: tuple[str, ...]   # empty for simple holdout
+    validation_ids: tuple[str, ...]   # empty unless validation_size is set
     test_ids: tuple[str, ...]
 
 def split_entities(
@@ -363,8 +380,13 @@ If `timestamps` and `spec.as_of` are set, entities with
 `timestamp > as_of` are dropped before shuffling.
 
 **v1 runner:** `run_experiment` accepts **holdout only** and errors on
-`kfold`. `split_entities` may still implement k-fold for callers that loop
-themselves.
+`kfold`. Use `run_kfold` for cross-validation orchestration. Optional
+`fitted_transform` is fit on the train slice only, then applied to
+train/validation/test before `adapter.fit`.
+
+`FeatureSchema` is a hashable column-kind document (`numeric`,
+`categorical`, `text`, `passthrough`). It is not stored on `FeatureTable`
+cells. Persist it with `put_feature_schema` as `kind=document`.
 
 **Private:** RNG and stratify implementation.
 
@@ -381,6 +403,7 @@ class EvaluationReport:
     n_missing: int
     notes: tuple[str, ...]
 
+
 def evaluate(
     y_true: Sequence[object],
     y_pred: Sequence[object],
@@ -390,9 +413,12 @@ def evaluate(
 ) -> EvaluationReport: ...
 ```
 
-**Proposed generic metric functions (plain functions, not a plugin system):**
-`accuracy`, `macro_f1`, `rmse`, `mae`. `log_loss` only if implementable
-without sklearn in core; otherwise defer to an optional extra.
+**Implemented generic metric functions (plain functions, not a plugin system):**
+`accuracy`, `macro_f1`, `macro_precision`, `macro_recall`, `rmse`, `mae`,
+`r2`, `log_loss`, `brier_score`, `roc_auc_binary`. Probability metrics use
+`y_proba`; `run_experiment` forwards adapter probabilities and duck-typed
+`classes`. `roc_auc_binary` accepts `MetricSpec.params["pos_label"]`.
+`EvaluationReport.notes` records which metrics used probabilities.
 
 **Private:** name → function dispatch dict. **Do not export a metric registry.**
 
@@ -453,6 +479,17 @@ def put_evaluation_artifact(
     created_at: datetime | None = None,
 ) -> tuple[str, str]:
     # kind=evaluation, related=[evaluation_of → subject]
+
+def put_comparison_artifact(
+    store: Store,
+    report: ComparisonReport,
+    *,
+    run: RunContext,
+    inputs: Sequence[str],
+    logical_key: str | None = None,
+    created_at: datetime | None = None,
+) -> tuple[str, str]:
+    # kind=evaluation, related=[evaluation_of → left, evaluation_of → right]
 ```
 
 **Uses existing types:** `Store`, `RunContext`, `ContractRef`, `ArtifactKind`,
@@ -463,10 +500,65 @@ def put_evaluation_artifact(
 
 ---
 
-### 5.7 `run.py` — thin orchestration
+### 5.7 `compare.py` — model comparison and fold aggregation
 
-**Purpose:** One function so lineage edges stay consistent. Not a training
-manager.
+**Purpose:** Compare two evaluations and aggregate k-fold scores without a
+model registry or champion selector.
+
+```python
+class ComparisonReport:
+    method: Literal["holdout_delta", "paired_bootstrap"]
+    left_payload_id: str
+    right_payload_id: str
+    deltas: Mapping[str, float]   # left - right
+    interval_low: Mapping[str, float] | None = None
+    interval_high: Mapping[str, float] | None = None
+    n: int
+    seed: int | None = None
+    notes: tuple[str, ...] = ()
+
+
+def compare_evaluations(
+    left: EvaluationReport,
+    right: EvaluationReport,
+    *,
+    left_payload_id: str,
+    right_payload_id: str,
+) -> ComparisonReport: ...
+
+def paired_bootstrap(
+    y_true: Sequence[object],
+    y_pred_left: Sequence[object],
+    y_pred_right: Sequence[object],
+    metrics: Sequence[MetricSpec],
+    *,
+    left_payload_id: str,
+    right_payload_id: str,
+    seed: int,
+    n_resamples: int = 1000,
+    y_proba_left: Sequence[Sequence[float] | None] | None = None,
+    y_proba_right: Sequence[Sequence[float] | None] | None = None,
+    classes: Sequence[object] | None = None,
+) -> ComparisonReport: ...
+
+def aggregate_fold_reports(
+    reports: Sequence[EvaluationReport],
+) -> EvaluationReport: ...
+```
+
+`compare_evaluations` requires matching metric names and the same `n`.
+`paired_bootstrap` resamples aligned prediction tuples with stdlib `random`
+only. `aggregate_fold_reports` returns the unweighted mean of fold metrics.
+
+Persist comparisons with `put_comparison_artifact` as `kind=evaluation`,
+citing both compared evaluation payloads via dual `evaluation_of` relations.
+
+---
+
+### 5.8 `run.py` — thin orchestration
+
+**Purpose:** Holdout and k-fold runners so lineage edges stay consistent. Not
+a training manager.
 
 ```python
 class ExperimentResult:
@@ -478,6 +570,16 @@ class ExperimentResult:
     evaluation_payload_id: str
     report: EvaluationReport
 
+
+class KFoldResult:
+    run_id: str
+    config_hash: str
+    feature_payload_id: str
+    aggregated_evaluation_payload_id: str
+    aggregated_report: EvaluationReport
+    folds: tuple[KFoldFoldResult, ...]
+
+
 def run_experiment(
     spec: ExperimentSpec,
     *,
@@ -488,12 +590,27 @@ def run_experiment(
     run: RunContext,
     serialize_model: Callable[[object], bytes],
     model_media_type: str = "application/octet-stream",
+    fitted_transform: FittedTransform | None = None,
 ) -> ExperimentResult: ...
+
+
+def run_kfold(
+    spec: ExperimentSpec,
+    *,
+    rows: Sequence[Mapping[str, object]],
+    feature_views: Mapping[str, FeatureView],
+    adapter_factory: Callable[[], Classifier | Regressor],
+    store: Store,
+    run: RunContext,
+    fitted_transform_factory: Callable[[], FittedTransform] | None = None,
+) -> KFoldResult: ...
 ```
 
-**v1 behavior (proposed):**
+**v1 behavior:**
 
-- Require `spec.split.method == "holdout"`
+- `run_experiment` requires `spec.split.method == "holdout"`
+- `run_kfold` requires `spec.split.method == "kfold"` and creates a fresh
+  adapter per fold via `adapter_factory`; model artifacts are not persisted
 - Require `spec.retrieval is None` (retrieval composed in project
   `FeatureView`, not inside runner)
 - Do **not** construct an adapter from `ModelSpec.family` — family is for
@@ -505,16 +622,17 @@ def run_experiment(
 
 ---
 
-### 5.8 `retrieval.py` — retrieval contracts
+### 5.9 `retrieval.py` — retrieval contracts
 
 **Purpose:** RAG as composable data/ML nodes, not a framework.
 `RetrievalSpec` lives in `spec.py` (declarative, hashed).
 
 ```python
 class RetrievedItem:
-    evidence: Evidence                 # citation + excerpt + method
+    evidence: Evidence  # citation + excerpt + method
     score: float | None = None
     source_timestamp: datetime | None = None
+
 
 class Retriever(Protocol):
     def retrieve(
@@ -525,12 +643,14 @@ class Retriever(Protocol):
         k: int,
     ) -> Sequence[RetrievedItem]: ...
 
+
 def filter_temporal(
     items: Sequence[RetrievedItem],
     as_of: date,
     *,
     require_timestamp: bool = True,
 ) -> tuple[RetrievedItem, ...]: ...
+
 
 def evidence_payload_ids(items: Sequence[RetrievedItem]) -> tuple[str, ...]: ...
 ```
@@ -542,7 +662,7 @@ domain schema), generic RAG orchestration, MCP server types.
 
 ---
 
-### 5.9 `modeling/__init__.py` — v1 public exports (implemented)
+### 5.10 `modeling/__init__.py` — v1 public exports (implemented)
 
 Export:
 
@@ -552,9 +672,13 @@ Export:
   `extract_column`
 - `SplitAssignment`, `split_entities`, `apply_split`
 - `EvaluationReport`, `evaluate`, named generic metrics
+- `ComparisonReport`, `compare_evaluations`, `paired_bootstrap`,
+  `aggregate_fold_reports`
 - `put_model_artifact`, `put_feature_dataset`, `put_prediction_artifact`,
-  `PredictionRow`, `prediction_payload_bytes`, `put_evaluation_artifact`
-- `ExperimentResult`, `run_experiment`
+  `PredictionRow`, `prediction_payload_bytes`, `put_evaluation_artifact`,
+  `comparison_report_bytes`, `put_comparison_artifact`
+- `ExperimentResult`, `run_experiment`, `KFoldFoldResult`, `KFoldResult`,
+  `run_kfold`
 **Intentionally not public (including deferred retrieval/RAG)**
 
 | Name | Reason |
@@ -787,7 +911,9 @@ quality). No modeling code.
 # restaurant_intelligence/modeling/views.py (consumer — not ds-platform)
 class StructuredRestaurantView:
     name = "structured"
+
     def transform(self, rows, *, as_of=None) -> FeatureTable: ...
+
 
 # restaurant_intelligence/modeling/run_cuisine.py (consumer)
 spec = ExperimentSpec(
@@ -826,7 +952,9 @@ metadata:
 # board_game_analysis/modeling/views.py (consumer — hypothetical)
 class StructuredGameView:
     name = "structured"
+
     def transform(self, rows, *, as_of=None) -> FeatureTable: ...
+
 
 spec = ExperimentSpec(
     experiment_id="complexity-v0",

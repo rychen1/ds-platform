@@ -7,6 +7,7 @@ import sys
 from datetime import date
 
 import pytest
+from pydantic import ValidationError
 
 from ds_platform.modeling.features import FeatureTable
 from ds_platform.modeling.spec import SplitSpec
@@ -16,6 +17,7 @@ from ds_platform.modeling.split import (
     split_entities,
     split_groups,
 )
+from import_boundary_util import assert_import_does_not_pull
 
 _FORBIDDEN = {
     "board_game_analysis",
@@ -189,9 +191,7 @@ print(",".join(sorted(assignment.train_ids)))
 
 
 def test_split_import_does_not_load_forbidden_modules() -> None:
-    import ds_platform.modeling.split  # noqa: F401
-
-    assert _FORBIDDEN.intersection(sys.modules) == set()
+    assert_import_does_not_pull("ds_platform.modeling.split", _FORBIDDEN)
 
 
 def test_holdout_requires_at_least_two_entities() -> None:
@@ -215,3 +215,80 @@ def test_split_groups_rejects_conflicting_duplicate_labels() -> None:
             _holdout_spec(test_size=0.5),
             labels=["A", "B"],
         )
+
+
+def test_holdout_three_way_ids_are_disjoint() -> None:
+    entity_ids = [f"e{index}" for index in range(12)]
+    assignment = split_entities(
+        entity_ids,
+        _holdout_spec(test_size=0.25, validation_size=0.25),
+    )[0]
+    train = set(assignment.train_ids)
+    validation = set(assignment.validation_ids)
+    test = set(assignment.test_ids)
+    assert train and validation and test
+    assert train.isdisjoint(validation)
+    assert train.isdisjoint(test)
+    assert validation.isdisjoint(test)
+    assert train | validation | test == set(entity_ids)
+
+
+def test_holdout_three_way_is_seed_stable() -> None:
+    entity_ids = [f"e{index}" for index in range(12)]
+    spec = _holdout_spec(test_size=0.25, validation_size=0.25)
+    assert split_entities(entity_ids, spec) == split_entities(entity_ids, spec)
+
+
+def test_stratified_three_way_keeps_classes_in_train() -> None:
+    entity_ids = [f"a{index}" for index in range(6)] + [
+        f"b{index}" for index in range(6)
+    ]
+    labels = ["A"] * 6 + ["B"] * 6
+    assignment = split_entities(
+        entity_ids,
+        _holdout_spec(test_size=1 / 3, validation_size=1 / 3, stratify=True),
+        labels=labels,
+    )[0]
+    train_labels = {
+        labels[entity_ids.index(entity_id)] for entity_id in assignment.train_ids
+    }
+    assert train_labels == {"A", "B"}
+    assert assignment.validation_ids
+    assert assignment.test_ids
+
+
+def test_stratified_three_way_errors_when_train_would_drop_a_class() -> None:
+    with pytest.raises(ValueError, match="non-empty train assignment"):
+        split_entities(
+            ["a1", "a2", "b1", "b2"],
+            _holdout_spec(test_size=0.4, validation_size=0.4, stratify=True),
+            labels=["A", "A", "B", "B"],
+        )
+
+
+def test_temporal_three_way_uses_later_ids_for_test() -> None:
+    entity_ids = ["t1", "t2", "t3", "t4"]
+    timestamps = [
+        date(2026, 1, 1),
+        date(2026, 2, 1),
+        date(2026, 3, 1),
+        date(2026, 4, 1),
+    ]
+    assignment = split_entities(
+        entity_ids,
+        SplitSpec(
+            method="temporal",
+            seed=0,
+            test_size=0.25,
+            validation_size=0.25,
+        ),
+        timestamps=timestamps,
+    )[0]
+    assert assignment.train_ids == ("t1", "t2")
+    assert assignment.validation_ids == ("t3",)
+    assert assignment.test_ids == ("t4",)
+
+
+def test_kfold_rejects_validation_size() -> None:
+    with pytest.raises(ValidationError, match="kfold split does not support"):
+        SplitSpec(method="kfold", seed=1, n_splits=3, validation_size=0.2)

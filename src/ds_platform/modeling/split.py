@@ -9,7 +9,9 @@ from datetime import date
 
 from pydantic import BaseModel, ConfigDict
 
+from ds_platform.modeling._spec_json import spec_canonical_json_bytes
 from ds_platform.modeling.features import FeatureTable
+from ds_platform.modeling.representations import RepresentationTable
 from ds_platform.modeling.sequences import SequenceTable
 from ds_platform.modeling.spec import SplitSpec
 
@@ -22,6 +24,9 @@ class SplitAssignment(_FrozenModel):
     train_ids: tuple[str, ...]
     validation_ids: tuple[str, ...]
     test_ids: tuple[str, ...]
+    method: str | None = None
+    seed: int | None = None
+    fold_index: int | None = None
 
 
 def split_entities(
@@ -37,8 +42,9 @@ def split_entities(
     entry per entity. Entities with ``timestamp > spec.as_of`` are dropped
     before shuffling. Missing timestamps raise ``ValueError``.
 
-    Holdout returns one assignment with empty ``validation_ids``. K-fold
-    returns ``spec.n_splits`` assignments, each with empty ``validation_ids``.
+    Holdout and temporal assignments populate ``validation_ids`` when
+    ``spec.validation_size`` is set. K-fold returns ``spec.n_splits``
+    assignments, each with empty ``validation_ids``.
     """
     ids, split_labels, split_times = _prepare_entities(
         entity_ids,
@@ -57,13 +63,14 @@ def split_entities(
 
     if spec.method == "holdout":
         assignment = _holdout_assignment(ids, split_labels, spec)
-        return (assignment,)
+        return (_annotate_assignment(assignment, spec),)
     if spec.method == "kfold":
         return _kfold_assignments(ids, split_labels, spec)
     if spec.method == "temporal":
         if split_times is None:
             raise ValueError("timestamps are required for temporal split")
-        return (_temporal_assignment(ids, split_times, spec),)
+        assignment = _temporal_assignment(ids, split_times, spec)
+        return (_annotate_assignment(assignment, spec),)
     raise ValueError(f"unsupported split method: {spec.method!r}")
 
 
@@ -145,6 +152,33 @@ def apply_group_split(
     return train, validation, test
 
 
+def split_assignment_bytes(assignment: SplitAssignment) -> bytes:
+    """Return deterministic UTF-8 JSON bytes for a split assignment."""
+    return spec_canonical_json_bytes(assignment)
+
+
+def load_split_assignment(data: bytes) -> SplitAssignment:
+    """Load a split assignment from canonical JSON bytes."""
+    import json
+
+    payload = json.loads(data.decode("utf-8"))
+    payload.setdefault("train_ids", [])
+    payload.setdefault("validation_ids", [])
+    payload.setdefault("test_ids", [])
+    return SplitAssignment.model_validate(payload)
+
+
+def apply_representation_split(
+    table: RepresentationTable,
+    assignment: SplitAssignment,
+) -> tuple[RepresentationTable, RepresentationTable, RepresentationTable]:
+    """Return train, validation, and test representation tables."""
+    train = _slice_representation_table(table, set(assignment.train_ids))
+    validation = _slice_representation_table(table, set(assignment.validation_ids))
+    test = _slice_representation_table(table, set(assignment.test_ids))
+    return train, validation, test
+
+
 def apply_split(
     table: FeatureTable,
     assignment: SplitAssignment,
@@ -214,50 +248,53 @@ def _holdout_assignment(
         raise ValueError("test_size must be between 0 and 1")
 
     if spec.stratify:
-        test_ids = _stratified_holdout_test_ids(entity_ids, labels, spec, test_size)
-    else:
-        test_ids = _random_holdout_test_ids(entity_ids, spec, test_size)
+        return _stratified_holdout_assignment(entity_ids, labels, spec)
 
-    test_set = set(test_ids)
+    shuffled = list(entity_ids)
+    random.Random(spec.seed).shuffle(shuffled)
+    n_test, n_validation = _holdout_counts(len(shuffled), spec)
+    test_ids = tuple(shuffled[:n_test])
+    validation_ids = tuple(shuffled[n_test : n_test + n_validation])
+    held_out = set(test_ids) | set(validation_ids)
     train_ids = tuple(
-        entity_id for entity_id in entity_ids if entity_id not in test_set
+        entity_id for entity_id in entity_ids if entity_id not in held_out
     )
     return SplitAssignment(
         train_ids=train_ids,
-        validation_ids=(),
+        validation_ids=validation_ids,
         test_ids=test_ids,
     )
 
 
-def _random_holdout_test_ids(
-    entity_ids: list[str],
-    spec: SplitSpec,
-    test_size: float,
-) -> tuple[str, ...]:
-    shuffled = list(entity_ids)
-    random.Random(spec.seed).shuffle(shuffled)
-    n_test = _holdout_test_count(len(shuffled), test_size)
-    return tuple(shuffled[:n_test])
-
-
-def _stratified_holdout_test_ids(
+def _stratified_holdout_assignment(
     entity_ids: list[str],
     labels: list[object] | None,
     spec: SplitSpec,
-    test_size: float,
-) -> tuple[str, ...]:
+) -> SplitAssignment:
     assert labels is not None
     by_label: dict[object, list[str]] = defaultdict(list)
     for entity_id, label in zip(entity_ids, labels, strict=True):
         by_label[label].append(entity_id)
 
     test_ids: list[str] = []
+    validation_ids: list[str] = []
     for label_index, label in enumerate(sorted(by_label, key=repr)):
         shuffled = list(by_label[label])
         random.Random(spec.seed + label_index).shuffle(shuffled)
-        n_test = _holdout_test_count(len(shuffled), test_size)
+        n_test, n_validation = _holdout_counts(len(shuffled), spec)
         test_ids.extend(shuffled[:n_test])
-    return tuple(test_ids)
+        validation_ids.extend(shuffled[n_test : n_test + n_validation])
+    held_out = set(test_ids) | set(validation_ids)
+    train_ids = tuple(
+        entity_id for entity_id in entity_ids if entity_id not in held_out
+    )
+    if spec.validation_size is not None:
+        _require_stratified_train_keeps_classes(entity_ids, labels, train_ids)
+    return SplitAssignment(
+        train_ids=train_ids,
+        validation_ids=tuple(validation_ids),
+        test_ids=tuple(test_ids),
+    )
 
 
 def _temporal_assignment(
@@ -276,12 +313,49 @@ def _temporal_assignment(
     ids = [entity_id for _timestamp, entity_id in ordered]
     if not ids:
         return SplitAssignment(train_ids=(), validation_ids=(), test_ids=())
-    n_test = _holdout_test_count(len(ids), spec.test_size)
+    n_test, n_validation = _holdout_counts(len(ids), spec)
+    test_ids = tuple(ids[-n_test:])
+    remaining = ids[:-n_test]
+    if n_validation:
+        validation_ids = tuple(remaining[-n_validation:])
+        train_ids = tuple(remaining[:-n_validation])
+    else:
+        validation_ids = ()
+        train_ids = tuple(remaining)
     return SplitAssignment(
-        train_ids=tuple(ids[:-n_test]),
-        validation_ids=(),
-        test_ids=tuple(ids[-n_test:]),
+        train_ids=train_ids,
+        validation_ids=validation_ids,
+        test_ids=test_ids,
     )
+
+
+def _holdout_counts(n_entities: int, spec: SplitSpec) -> tuple[int, int]:
+    if spec.test_size is None:
+        raise ValueError(f"test_size is required for {spec.method} split")
+    if not 0 < spec.test_size < 1:
+        raise ValueError("test_size must be between 0 and 1")
+    n_test = _holdout_test_count(n_entities, spec.test_size)
+    if spec.validation_size is None:
+        return n_test, 0
+    n_validation = max(1, int(round(n_entities * spec.validation_size)))
+    if n_entities - n_test - n_validation < 1:
+        raise ValueError("three-way split requires a non-empty train assignment")
+    return n_test, n_validation
+
+
+def _require_stratified_train_keeps_classes(
+    entity_ids: list[str],
+    labels: list[object],
+    train_ids: tuple[str, ...],
+) -> None:
+    label_by_id = dict(zip(entity_ids, labels, strict=True))
+    train_labels = {label_by_id[entity_id] for entity_id in train_ids}
+    missing = set(labels) - train_labels
+    if missing:
+        dropped = ", ".join(repr(label) for label in sorted(missing, key=repr))
+        raise ValueError(
+            "stratified three-way split dropped class(es) from train: " + dropped
+        )
 
 
 def _holdout_test_count(n_entities: int, test_size: float) -> int:
@@ -318,10 +392,14 @@ def _kfold_assignments(
             for entity_id in fold
         )
         assignments.append(
-            SplitAssignment(
-                train_ids=train_ids,
-                validation_ids=(),
-                test_ids=test_ids,
+            _annotate_assignment(
+                SplitAssignment(
+                    train_ids=train_ids,
+                    validation_ids=(),
+                    test_ids=test_ids,
+                ),
+                spec,
+                fold_index=fold_index,
             )
         )
     return tuple(assignments)
@@ -383,6 +461,49 @@ def _slice_sequence_table(
         positions=tuple(table.positions[index] for index in indexes),
         actor_ids=tuple(table.actor_ids[index] for index in indexes),
         source_payload_ids=tuple(table.source_payload_ids[index] for index in indexes),
+    )
+
+
+def _annotate_assignment(
+    assignment: SplitAssignment,
+    spec: SplitSpec,
+    *,
+    fold_index: int | None = None,
+) -> SplitAssignment:
+    return assignment.model_copy(
+        update={
+            "method": spec.method,
+            "seed": spec.seed,
+            "fold_index": fold_index,
+        }
+    )
+
+
+def _slice_representation_table(
+    table: RepresentationTable,
+    entity_id_set: set[str],
+) -> RepresentationTable:
+    if not entity_id_set:
+        return RepresentationTable(
+            entity_ids=(),
+            vectors=(),
+            dim=table.dim,
+            source_payload_ids=(),
+            encoding_hash=table.encoding_hash,
+        )
+    selected_indexes = [
+        index
+        for index, entity_id in enumerate(table.entity_ids)
+        if entity_id in entity_id_set
+    ]
+    return RepresentationTable(
+        entity_ids=tuple(table.entity_ids[index] for index in selected_indexes),
+        vectors=tuple(table.vectors[index] for index in selected_indexes),
+        dim=table.dim,
+        source_payload_ids=tuple(
+            table.source_payload_ids[index] for index in selected_indexes
+        ),
+        encoding_hash=table.encoding_hash,
     )
 
 

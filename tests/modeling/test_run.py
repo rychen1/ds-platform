@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import pickle
-import sys
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from typing import cast
@@ -25,6 +24,7 @@ from ds_platform.modeling.spec import (
     experiment_config_hash,
 )
 from ds_platform.modeling.split import split_entities
+from import_boundary_util import assert_import_does_not_pull
 
 _FORBIDDEN = {
     "board_game_analysis",
@@ -85,6 +85,37 @@ class _FloatRegressor:
 
     def predict(self, features: FeatureTable) -> list[float]:
         return [1.0] * len(features.entity_ids)
+
+
+class _RecordingTransform:
+    def __init__(self) -> None:
+        self.fit_ids: list[str] = []
+
+    def fit(self, table: FeatureTable) -> None:
+        self.fit_ids = list(table.entity_ids)
+
+    def transform(self, table: FeatureTable) -> FeatureTable:
+        return table
+
+
+class _ProbabilisticClassifier:
+    classes = ("A", "B")
+
+    def fit(self, features: FeatureTable, y: Sequence[str | int]) -> None:
+        del features, y
+
+    def predict(self, features: FeatureTable) -> list[str | int]:
+        positives = {"e1", "e2", "e5"}
+        return [
+            "A" if entity_id in positives else "B" for entity_id in features.entity_ids
+        ]
+
+    def predict_proba(self, features: FeatureTable) -> list[list[float]]:
+        positives = {"e1", "e2", "e5"}
+        return [
+            [0.9, 0.1] if entity_id in positives else [0.2, 0.8]
+            for entity_id in features.entity_ids
+        ]
 
 
 def _rows() -> list[dict[str, object]]:
@@ -236,7 +267,64 @@ def test_run_experiment_rejects_task_adapter_mismatch(tmp_path) -> None:
         )
 
 
-def test_run_import_does_not_load_forbidden_modules() -> None:
-    import ds_platform.modeling.run  # noqa: F401
+def test_run_experiment_fitted_transform_sees_only_train_ids(tmp_path) -> None:
+    store = LocalStore(tmp_path)
+    spec = _experiment(
+        split=SplitSpec(method="holdout", seed=42, test_size=0.4, validation_size=0.2)
+    )
+    transform = _RecordingTransform()
+    result = run_experiment(
+        spec,
+        rows=_rows(),
+        feature_views={"structured": _StructuredView(_DATASET_ID)},
+        adapter=_MajorityClassifier(),
+        store=store,
+        run=_run(),
+        serialize_model=pickle.dumps,
+        fitted_transform=transform,
+    )
+    assignment = split_entities([str(row["id"]) for row in _rows()], spec.split)[0]
+    assert set(transform.fit_ids) == set(assignment.train_ids)
+    assert set(transform.fit_ids).isdisjoint(set(assignment.test_ids))
+    assert set(transform.fit_ids).isdisjoint(set(assignment.validation_ids))
+    assert store.exists(result.evaluation_payload_id)
 
-    assert _FORBIDDEN.intersection(sys.modules) == set()
+
+def test_run_experiment_scores_probabilities_and_records_notes(tmp_path) -> None:
+    store = LocalStore(tmp_path)
+    spec = _experiment(
+        metrics=(
+            MetricSpec(name="accuracy"),
+            MetricSpec(name="log_loss"),
+        )
+    )
+    result = run_experiment(
+        spec,
+        rows=_rows(),
+        feature_views={"structured": _StructuredView(_DATASET_ID)},
+        adapter=_ProbabilisticClassifier(),
+        store=store,
+        run=_run(),
+        serialize_model=pickle.dumps,
+    )
+    assert "accuracy" in result.report.metrics
+    assert "log_loss" in result.report.metrics
+    assert result.report.notes == ("log_loss used y_proba",)
+
+    prediction_lines = (
+        store.get(result.prediction_payload_id).decode("utf-8").strip().split("\n")
+    )
+    for line in prediction_lines:
+        row = json.loads(line)
+        assert row["y_proba"] is not None
+        assert len(row["y_proba"]) == 2
+
+    evaluation_payload = json.loads(
+        store.get(result.evaluation_payload_id).decode("utf-8")
+    )
+    assert evaluation_payload["notes"] == ["log_loss used y_proba"]
+    assert "log_loss" in evaluation_payload["metrics"]
+
+
+def test_run_import_does_not_load_forbidden_modules() -> None:
+    assert_import_does_not_pull("ds_platform.modeling.run", _FORBIDDEN)

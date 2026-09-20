@@ -23,11 +23,44 @@ dependencies = [
     "pydantic>=2.10",
 ]
 
+[project.optional-dependencies]
+xgboost = [
+    "numpy>=1.26",
+    "pandas>=2.2",
+    "scikit-learn>=1.5",
+    "xgboost>=2.1",
+]
+lightgbm = [
+    "numpy>=1.26",
+    "pandas>=2.2",
+    "scikit-learn>=1.5",
+    "lightgbm>=4.0",
+]
+catboost = [
+    "numpy>=1.26",
+    "pandas>=2.2",
+    "catboost>=1.2",
+]
+boosting = [
+    "numpy>=1.26",
+    "pandas>=2.2",
+    "scikit-learn>=1.5",
+    "xgboost>=2.1",
+    "lightgbm>=4.0",
+    "catboost>=1.2",
+]
+
 [dependency-groups]
 dev = [
     "pyright>=1.1",
     "pytest>=8",
     "ruff>=0.8",
+    "numpy>=1.26",
+    "pandas>=2.2",
+    "scikit-learn>=1.5",
+    "xgboost>=2.1",
+    "lightgbm>=4.0",
+    "catboost>=1.2",
 ]
 
 [build-system]
@@ -47,6 +80,7 @@ select = ["E", "F", "I", "UP", "B"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["tests"]
 
 [tool.pyright]
 include = ["src", "tests"]

@@ -1,5 +1,4 @@
 import json
-import sys
 from datetime import UTC, datetime
 from importlib.resources import files
 from pathlib import Path
@@ -26,6 +25,7 @@ from ds_platform.types import (
     dump_json_schema,
     new_run_id,
 )
+from import_boundary_util import assert_import_does_not_pull
 
 _PID = payload_id(b"types-fixture")
 _CREATED = datetime(2026, 5, 1, 12, 0, 0, tzinfo=UTC)
@@ -158,9 +158,6 @@ def test_committed_json_schemas_match_models() -> None:
 
 
 def test_core_import_graph_has_no_forbidden_libraries() -> None:
-    import ds_platform  # noqa: F401
-    import ds_platform.modeling  # noqa: F401
-
     forbidden = {
         "boto3",
         "board_game_analysis",
@@ -177,8 +174,8 @@ def test_core_import_graph_has_no_forbidden_libraries() -> None:
         "sqlmesh",
         "streamlit",
     }
-    loaded = forbidden.intersection(sys.modules)
-    assert loaded == set()
+    assert_import_does_not_pull("ds_platform", forbidden)
+    assert_import_does_not_pull("ds_platform.modeling", forbidden)
 
 
 def test_frozen_json_rejects_mutation() -> None:

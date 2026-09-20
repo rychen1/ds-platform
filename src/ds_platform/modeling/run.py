@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict
 
 from ds_platform.modeling._spec_json import spec_canonical_json_bytes
 from ds_platform.modeling.capabilities import Classifier, Regressor
+from ds_platform.modeling.compare import aggregate_fold_reports
 from ds_platform.modeling.evaluate import EvaluationReport, evaluate
 from ds_platform.modeling.features import (
     FeatureTable,
@@ -29,6 +30,7 @@ from ds_platform.modeling.records import (
 )
 from ds_platform.modeling.spec import ExperimentSpec, experiment_config_hash
 from ds_platform.modeling.split import apply_split, split_entities
+from ds_platform.modeling.transforms import FittedTransform, apply_fitted_transform
 from ds_platform.store import Store
 from ds_platform.types import RunContext
 
@@ -48,6 +50,23 @@ class ExperimentResult(_FrozenModel):
     report: EvaluationReport
 
 
+class KFoldFoldResult(_FrozenModel):
+    fold_index: int
+    split_payload_id: str
+    prediction_payload_id: str
+    evaluation_payload_id: str
+    report: EvaluationReport
+
+
+class KFoldResult(_FrozenModel):
+    run_id: str
+    config_hash: str
+    feature_payload_id: str
+    aggregated_evaluation_payload_id: str
+    aggregated_report: EvaluationReport
+    folds: tuple[KFoldFoldResult, ...]
+
+
 def run_experiment(
     spec: ExperimentSpec,
     *,
@@ -58,6 +77,7 @@ def run_experiment(
     run: RunContext,
     serialize_model: Callable[[object], bytes],
     model_media_type: str = "application/octet-stream",
+    fitted_transform: FittedTransform | None = None,
 ) -> ExperimentResult:
     """Run a v1 holdout supervised experiment and persist modeling artifacts.
 
@@ -92,10 +112,15 @@ def run_experiment(
         labels=split_labels,
     )[0]
     if not assignment.train_ids or not assignment.test_ids:
-        raise ValueError(
-            "run_experiment requires non-empty train and test assignments"
+        raise ValueError("run_experiment requires non-empty train and test assignments")
+    slices = apply_split(features, assignment)
+    if fitted_transform is not None:
+        train_features, _, test_features = apply_fitted_transform(
+            fitted_transform,
+            *slices,
         )
-    train_features, _, test_features = apply_split(features, assignment)
+    else:
+        train_features, _, test_features = slices
 
     _fit_adapter(adapter, spec, train_features, labels_by_entity)
     test_predictions = adapter.predict(test_features)
@@ -124,11 +149,12 @@ def run_experiment(
     )
 
     test_labels = _labels_for_entities(test_features.entity_ids, labels_by_entity)
+    test_proba = _maybe_predict_proba(adapter, test_features)
     prediction_rows = _prediction_rows(
         test_features.entity_ids,
         y_true=test_labels,
         y_pred=test_predictions,
-        y_proba=_maybe_predict_proba(adapter, test_features),
+        y_proba=test_proba,
     )
     prediction_bytes = prediction_payload_bytes(prediction_rows)
     prediction_payload_id, _prediction_record_id = put_prediction_artifact(
@@ -143,6 +169,8 @@ def run_experiment(
         test_labels,
         list(test_predictions),
         spec.metrics,
+        y_proba=test_proba,
+        classes=_maybe_classes(adapter),
     )
     evaluation_payload_id, _evaluation_record_id = put_evaluation_artifact(
         store,
@@ -166,6 +194,160 @@ def run_experiment(
         prediction_payload_id=prediction_payload_id,
         evaluation_payload_id=evaluation_payload_id,
         report=report,
+    )
+
+
+def run_kfold(
+    spec: ExperimentSpec,
+    *,
+    rows: Sequence[Mapping[str, object]],
+    feature_views: Mapping[str, FeatureView],
+    adapter_factory: Callable[[], Classifier | Regressor],
+    store: Store,
+    run: RunContext,
+    fitted_transform_factory: Callable[[], FittedTransform] | None = None,
+) -> KFoldResult:
+    """Run k-fold cross-validation and persist per-fold plus aggregated scores.
+
+    A fresh adapter is created for each fold via ``adapter_factory``. When
+    ``fitted_transform_factory`` is provided, a fresh transform is fit on
+    the fold train slice only. Model artifacts are not persisted.
+    """
+    if spec.split.method != "kfold":
+        raise ValueError("run_kfold requires split.method == 'kfold'")
+    if spec.split.as_of is not None:
+        raise ValueError(
+            "run_kfold does not support split.as_of; filter rows before calling"
+        )
+    if spec.dataset.payload_id is None:
+        raise ValueError("run_kfold requires dataset.payload_id for lineage")
+    if spec.split.n_splits is None:
+        raise ValueError("run_kfold requires split.n_splits")
+
+    config_hash = experiment_config_hash(spec)
+    run_with_hash = run.model_copy(update={"config_hash": config_hash})
+
+    aligned = _materialize_features(spec, rows, feature_views)
+    if not aligned.entity_ids:
+        raise ValueError("run_kfold requires at least one entity")
+    labels = extract_column(aligned, spec.target.column)
+    features = _select_feature_columns(aligned, spec)
+    labels_by_entity = dict(zip(aligned.entity_ids, labels, strict=True))
+
+    split_labels: Sequence[object] | None = labels if spec.split.stratify else None
+    assignments = split_entities(
+        aligned.entity_ids,
+        spec.split,
+        labels=split_labels,
+    )
+    if len(assignments) != spec.split.n_splits:
+        raise ValueError("run_kfold expected one assignment per fold")
+
+    feature_inputs = _dataset_inputs(spec)
+    feature_payload_id, _feature_record_id = put_feature_dataset(
+        store,
+        _feature_table_bytes(features),
+        run=run_with_hash,
+        inputs=feature_inputs,
+        media_type="application/json",
+    )
+
+    fold_results: list[KFoldFoldResult] = []
+    fold_reports: list[EvaluationReport] = []
+    for assignment in assignments:
+        if assignment.fold_index is None:
+            raise ValueError("kfold assignment must include fold_index")
+        if not assignment.train_ids or not assignment.test_ids:
+            raise ValueError("run_kfold requires non-empty train and test assignments")
+
+        slices = apply_split(features, assignment)
+        fitted_transform = (
+            fitted_transform_factory() if fitted_transform_factory is not None else None
+        )
+        if fitted_transform is not None:
+            train_features, _, test_features = apply_fitted_transform(
+                fitted_transform,
+                *slices,
+            )
+        else:
+            train_features, _, test_features = slices
+
+        adapter = adapter_factory()
+        _fit_adapter(adapter, spec, train_features, labels_by_entity)
+        test_predictions = adapter.predict(test_features)
+
+        split_payload_id, _split_record_id = put_split_assignment(
+            store,
+            assignment,
+            run=run_with_hash,
+            inputs=[feature_payload_id, *feature_inputs],
+        )
+
+        test_labels = _labels_for_entities(test_features.entity_ids, labels_by_entity)
+        test_proba = _maybe_predict_proba(adapter, test_features)
+        prediction_rows = _prediction_rows(
+            test_features.entity_ids,
+            y_true=test_labels,
+            y_pred=test_predictions,
+            y_proba=test_proba,
+        )
+        prediction_bytes = prediction_payload_bytes(prediction_rows)
+        prediction_payload_id, _prediction_record_id = put_prediction_artifact(
+            store,
+            prediction_bytes,
+            run=run_with_hash,
+            inputs=[feature_payload_id, split_payload_id],
+            media_type="application/jsonl",
+        )
+
+        report = evaluate(
+            test_labels,
+            list(test_predictions),
+            spec.metrics,
+            y_proba=test_proba,
+            classes=_maybe_classes(adapter),
+        )
+        evaluation_payload_id, _evaluation_record_id = put_evaluation_artifact(
+            store,
+            report,
+            run=run_with_hash,
+            subject_payload_id=prediction_payload_id,
+            inputs=[prediction_payload_id, feature_payload_id, split_payload_id],
+        )
+
+        fold_results.append(
+            KFoldFoldResult(
+                fold_index=assignment.fold_index,
+                split_payload_id=split_payload_id,
+                prediction_payload_id=prediction_payload_id,
+                evaluation_payload_id=evaluation_payload_id,
+                report=report,
+            )
+        )
+        fold_reports.append(report)
+
+    aggregated_report = aggregate_fold_reports(fold_reports)
+    aggregated_inputs = _dedupe_preserve_order(
+        [
+            feature_payload_id,
+            *[fold.evaluation_payload_id for fold in fold_results],
+        ]
+    )
+    aggregated_evaluation_payload_id, _aggregated_record_id = put_evaluation_artifact(
+        store,
+        aggregated_report,
+        run=run_with_hash,
+        subject_payload_id=fold_results[0].prediction_payload_id,
+        inputs=aggregated_inputs,
+    )
+
+    return KFoldResult(
+        run_id=run_with_hash.run_id,
+        config_hash=config_hash,
+        feature_payload_id=feature_payload_id,
+        aggregated_evaluation_payload_id=aggregated_evaluation_payload_id,
+        aggregated_report=aggregated_report,
+        folds=tuple(fold_results),
     )
 
 
@@ -298,6 +480,31 @@ def _maybe_predict_proba(
         return None
     raw = predict_proba(features)
     return [list(item) for item in raw]
+
+
+def _maybe_classes(adapter: object) -> tuple[str | int, ...] | None:
+    for attribute in ("classes", "classes_", "_classes"):
+        raw = getattr(adapter, attribute, None)
+        if raw is None:
+            continue
+        try:
+            values = tuple(raw)
+        except TypeError:
+            continue
+        if values:
+            return values
+    return None
+
+
+def _dedupe_preserve_order(payload_ids: Sequence[str]) -> list[str]:
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for payload_id in payload_ids:
+        if payload_id in seen:
+            continue
+        seen.add(payload_id)
+        ordered.append(payload_id)
+    return ordered
 
 
 def _dataset_inputs(spec: ExperimentSpec) -> list[str]:

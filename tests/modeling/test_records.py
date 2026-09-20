@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import sys
 from datetime import UTC, datetime
 
 from ds_platform import (
@@ -16,15 +15,22 @@ from ds_platform import (
     record_id_from_bytes,
 )
 from ds_platform.modeling.evaluate import EvaluationReport
+from ds_platform.modeling.compare import compare_evaluations
 from ds_platform.modeling.records import (
     PredictionRow,
+    comparison_report_bytes,
     evaluation_report_bytes,
+    feature_schema_bytes,
     prediction_payload_bytes,
+    put_comparison_artifact,
     put_evaluation_artifact,
     put_feature_dataset,
+    put_feature_schema,
     put_model_artifact,
     put_prediction_artifact,
 )
+from ds_platform.modeling.spec import FeatureSchema
+from import_boundary_util import assert_import_does_not_pull
 
 _FORBIDDEN = {
     "board_game_analysis",
@@ -129,6 +135,31 @@ def test_put_evaluation_artifact_sets_evaluation_of(tmp_path) -> None:
     ]
 
 
+def test_put_comparison_artifact_sets_dual_evaluation_of(tmp_path) -> None:
+    store = LocalStore(tmp_path)
+    comparison = compare_evaluations(
+        EvaluationReport(metrics={"accuracy": 0.8}, n=4, n_missing=0),
+        EvaluationReport(metrics={"accuracy": 0.6}, n=4, n_missing=0),
+        left_payload_id=_INPUT_A,
+        right_payload_id=_INPUT_B,
+    )
+    payload_id_value, record_id_value = put_comparison_artifact(
+        store,
+        comparison,
+        run=_run(),
+        inputs=[_INPUT_A, _INPUT_B],
+    )
+    assert payload_id_value == payload_id(comparison_report_bytes(comparison))
+    record = json.loads(store.get(record_id_value).decode("utf-8"))
+    assert record["kind"] == ArtifactKind.EVALUATION
+    assert set(record["inputs"]) == {_INPUT_A, _INPUT_B}
+    assert {item["payload_id"] for item in record["related"]} == {
+        _INPUT_A,
+        _INPUT_B,
+    }
+    assert all(item["rel"] == RelationType.EVALUATION_OF for item in record["related"])
+
+
 def test_prediction_payload_bytes_is_deterministic() -> None:
     rows = [
         PredictionRow(entity_id="e2", y_pred=0),
@@ -157,10 +188,26 @@ def test_put_record_helpers_repair_corrupted_bytes(tmp_path) -> None:
     assert store.get(pid) == data
 
 
-def test_records_import_does_not_load_forbidden_modules() -> None:
-    import ds_platform.modeling.records  # noqa: F401
+def test_put_feature_schema_writes_document_kind(tmp_path) -> None:
+    store = LocalStore(tmp_path)
+    schema = FeatureSchema(columns=("borough",), kinds=("categorical",))
+    payload_id_value, record_id_value = put_feature_schema(
+        store,
+        schema,
+        run=_run(),
+        inputs=[_INPUT_A],
+        logical_key="proj:features/schema:v0",
+    )
+    assert payload_id_value == payload_id(feature_schema_bytes(schema))
+    record = json.loads(store.get(record_id_value).decode("utf-8"))
+    assert record["kind"] == ArtifactKind.DOCUMENT
+    assert json.loads(store.get(payload_id_value).decode("utf-8"))["columns"] == [
+        "borough"
+    ]
 
-    assert _FORBIDDEN.intersection(sys.modules) == set()
+
+def test_records_import_does_not_load_forbidden_modules() -> None:
+    assert_import_does_not_pull("ds_platform.modeling.records", _FORBIDDEN)
 
 
 def test_put_record_round_trip_uses_existing_put_record(tmp_path) -> None:

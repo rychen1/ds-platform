@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import sys
-
 import pytest
 from pydantic import ValidationError
 
@@ -17,6 +15,7 @@ from ds_platform.modeling.sequences import (
 )
 from ds_platform.modeling.spec import SequenceSpec, SplitSpec, spec_config_hash
 from ds_platform.modeling.split import apply_group_split, split_groups
+from import_boundary_util import assert_import_does_not_pull
 
 _FORBIDDEN = {
     "Trajectory",
@@ -138,7 +137,7 @@ def test_sequence_spec_hash() -> None:
 
 
 def test_sequences_import_does_not_load_forbidden_modules() -> None:
+    assert_import_does_not_pull("ds_platform.modeling.sequences", _FORBIDDEN)
     import ds_platform.modeling.sequences as sequences
 
-    assert _FORBIDDEN.intersection(sys.modules) == set()
     assert "Trajectory" not in dir(sequences)

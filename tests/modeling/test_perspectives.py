@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import sys
 from collections.abc import Sequence
 
 import pytest
@@ -20,6 +19,7 @@ from ds_platform.modeling.perspectives import (
     to_representation_table,
 )
 from ds_platform.modeling.spec import PerspectiveSpec, spec_config_hash
+from import_boundary_util import assert_import_does_not_pull
 
 _FORBIDDEN = {
     "board_game_analysis",
@@ -141,9 +141,7 @@ def test_perspective_spec_hash() -> None:
 
 
 def test_perspectives_import_does_not_load_forbidden_modules() -> None:
-    import ds_platform.modeling.perspectives  # noqa: F401
-
-    assert _FORBIDDEN.intersection(sys.modules) == set()
+    assert_import_does_not_pull("ds_platform.modeling.perspectives", _FORBIDDEN)
     assert not hasattr(
         __import__("ds_platform.modeling.perspectives", fromlist=["GameState"]),
         "GameState",

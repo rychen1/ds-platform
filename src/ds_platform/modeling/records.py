@@ -9,10 +9,12 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ds_platform.hashing import format_aware_utc, payload_id
 from ds_platform.modeling._spec_json import spec_canonical_json_bytes
+from ds_platform.modeling.compare import ComparisonReport
 from ds_platform.modeling.evaluate import EvaluationReport
 from ds_platform.modeling.features import Scalar
 from ds_platform.modeling.representations import RepresentationTable
-from ds_platform.modeling.split import SplitAssignment
+from ds_platform.modeling.spec import FeatureSchema
+from ds_platform.modeling.split import SplitAssignment, split_assignment_bytes
 from ds_platform.store import Store, put_record
 from ds_platform.types import (
     ArtifactKind,
@@ -123,6 +125,33 @@ def put_representation_artifact(
     )
 
 
+def feature_schema_bytes(schema: FeatureSchema) -> bytes:
+    """Return deterministic UTF-8 JSON bytes for a feature schema."""
+    return spec_canonical_json_bytes(schema)
+
+
+def put_feature_schema(
+    store: Store,
+    schema: FeatureSchema,
+    *,
+    run: RunContext,
+    inputs: Sequence[str],
+    logical_key: str | None = None,
+    created_at: datetime | None = None,
+) -> tuple[str, str]:
+    """Persist a feature schema as a ``document`` artifact."""
+    return _put_artifact(
+        store,
+        feature_schema_bytes(schema),
+        kind=ArtifactKind.DOCUMENT,
+        run=run,
+        inputs=inputs,
+        media_type="application/json",
+        logical_key=logical_key,
+        created_at=created_at,
+    )
+
+
 def put_split_assignment(
     store: Store,
     assignment: SplitAssignment,
@@ -135,11 +164,53 @@ def put_split_assignment(
     """Persist a split assignment as a ``document`` artifact."""
     return _put_artifact(
         store,
-        spec_canonical_json_bytes(assignment),
+        split_assignment_bytes(assignment),
         kind=ArtifactKind.DOCUMENT,
         run=run,
         inputs=inputs,
         media_type="application/json",
+        logical_key=logical_key,
+        created_at=created_at,
+    )
+
+
+def cluster_assignment_payload_bytes(
+    entity_ids: Sequence[str],
+    labels: Sequence[str | int],
+) -> bytes:
+    """Return deterministic JSON bytes mapping entity ids to cluster labels."""
+    if len(entity_ids) != len(labels):
+        raise ValueError("entity_ids length must match labels length")
+    ordered = sorted(
+        zip(entity_ids, labels, strict=True),
+        key=lambda item: item[0],
+    )
+    payload = {
+        "assignments": [
+            {"entity_id": entity_id, "label": label} for entity_id, label in ordered
+        ]
+    }
+    return spec_canonical_json_bytes(payload)
+
+
+def put_cluster_assignment(
+    store: Store,
+    data: bytes,
+    *,
+    run: RunContext,
+    inputs: Sequence[str],
+    media_type: str = "application/json",
+    logical_key: str | None = None,
+    created_at: datetime | None = None,
+) -> tuple[str, str]:
+    """Persist cluster assignment bytes as a ``document`` artifact."""
+    return _put_artifact(
+        store,
+        data,
+        kind=ArtifactKind.DOCUMENT,
+        run=run,
+        inputs=inputs,
+        media_type=media_type,
         logical_key=logical_key,
         created_at=created_at,
     )
@@ -243,6 +314,48 @@ def put_evaluation_artifact(
 def evaluation_report_bytes(report: EvaluationReport) -> bytes:
     """Return deterministic UTF-8 JSON bytes for an evaluation report."""
     return spec_canonical_json_bytes(report)
+
+
+def comparison_report_bytes(report: ComparisonReport) -> bytes:
+    """Return deterministic UTF-8 JSON bytes for a comparison report."""
+    return spec_canonical_json_bytes(report)
+
+
+def put_comparison_artifact(
+    store: Store,
+    report: ComparisonReport,
+    *,
+    run: RunContext,
+    inputs: Sequence[str],
+    logical_key: str | None = None,
+    created_at: datetime | None = None,
+) -> tuple[str, str]:
+    """Persist a comparison report as ``kind=evaluation``.
+
+    ``inputs`` should cite the compared evaluation artifacts. ``related``
+    records ``evaluation_of`` both ``left_payload_id`` and
+    ``right_payload_id``.
+    """
+    return _put_artifact(
+        store,
+        comparison_report_bytes(report),
+        kind=ArtifactKind.EVALUATION,
+        run=run,
+        inputs=inputs,
+        media_type="application/json",
+        logical_key=logical_key,
+        related=[
+            RelatedRef(
+                rel=RelationType.EVALUATION_OF,
+                payload_id=report.left_payload_id,
+            ),
+            RelatedRef(
+                rel=RelationType.EVALUATION_OF,
+                payload_id=report.right_payload_id,
+            ),
+        ],
+        created_at=created_at,
+    )
 
 
 def _put_artifact(

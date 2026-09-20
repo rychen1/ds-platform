@@ -18,6 +18,9 @@ Read [docs/architecture.md](docs/architecture.md) before writing code. That
 document is the current source of truth: independent design, critical
 review, and the freeze set.
 
+Optional boosting-library adapters (XGBoost, LightGBM, CatBoost) live under
+`ds_platform.integrations`. See [docs/integrations-boosting.md](docs/integrations-boosting.md).
+
 ## What this is for
 
 Projects that need stable answers to:
