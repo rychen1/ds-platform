@@ -23,6 +23,7 @@ from ds_platform.modeling.features import (
     require_source_payload_ids,
 )
 from ds_platform.modeling.representations import RepresentationTable
+from ds_platform.modeling.run import run_experiment
 from ds_platform.modeling.spec import (
     DatasetRef,
     EncodingSpec,
@@ -34,7 +35,7 @@ from ds_platform.modeling.spec import (
     TargetSpec,
     experiment_config_hash,
 )
-from ds_platform.modeling.split import split_entities
+from ds_platform.modeling.split import split_entities, split_groups
 from ds_platform.store import HashMismatchError, LocalStore
 from ds_platform.types import (
     ArtifactKind,
@@ -284,6 +285,261 @@ def test_schema_version_field_exists() -> None:
     assert ArtifactRecord.model_fields["schema_version"].default == 0
     with pytest.raises(ValidationError):
         ArtifactRecord.model_validate({**_record().model_dump(), "schema_version": 1})
+
+
+# --- Pass 2 — regressions for post-audit fixes ---
+
+
+def test_exists_false_on_corrupt_payload(tmp_path: Path) -> None:
+    store = LocalStore(tmp_path)
+    data = b"intact-bytes"
+    pid = payload_id(data)
+    store.put(pid, data, media_type="text/plain")
+    path = tmp_path / pid[:2] / pid[2:4] / pid
+    path.write_bytes(b"corrupted")
+    assert store.exists(pid) is False
+    with pytest.raises(HashMismatchError):
+        store.get(pid)
+
+
+def test_locate_returns_none_for_corrupt_payload(tmp_path: Path) -> None:
+    store = LocalStore(tmp_path)
+    data = b"intact-bytes"
+    pid = payload_id(data)
+    store.put(pid, data, media_type="text/plain")
+    path = tmp_path / pid[:2] / pid[2:4] / pid
+    path.write_bytes(b"corrupted")
+    assert store.locate(pid) is None
+
+
+def test_evaluation_report_omits_empty_notes_from_spec_canonical() -> None:
+    encoded = spec_canonical_json_bytes(
+        EvaluationReport(metrics={"accuracy": 1.0}, n=1, n_missing=0)
+    ).decode()
+    assert '"notes"' not in encoded
+
+
+def test_inherited_policy_refs_require_sha256() -> None:
+    with pytest.raises(ValidationError, match="pattern"):
+        _record(inherited_policy_refs=("not-a-payload-id",))
+
+
+def test_holdout_single_entity_is_rejected() -> None:
+    with pytest.raises(ValueError, match="at least two entities"):
+        split_entities(
+            ["only"],
+            SplitSpec(method="holdout", seed=1, test_size=0.2),
+        )
+
+
+def test_as_of_filter_dropping_all_entities_is_rejected() -> None:
+    with pytest.raises(ValueError, match="no entities remain"):
+        split_entities(
+            ["e1"],
+            SplitSpec(
+                method="holdout",
+                seed=1,
+                test_size=0.2,
+                as_of=datetime(2020, 1, 1, tzinfo=UTC).date(),
+            ),
+            timestamps=[datetime(2021, 1, 1, tzinfo=UTC).date()],
+        )
+
+
+def test_split_groups_rejects_conflicting_duplicate_labels() -> None:
+    with pytest.raises(ValueError, match="conflicting labels"):
+        split_groups(
+            ["g1", "g1"],
+            SplitSpec(method="holdout", seed=1, test_size=0.5),
+            labels=["A", "B"],
+        )
+
+
+def test_run_experiment_rejects_single_entity(tmp_path: Path) -> None:
+    class _SingleView:
+        name = "v"
+
+        def transform(
+            self,
+            rows: object,
+            *,
+            as_of: object = None,
+        ) -> FeatureTable:
+            del rows, as_of
+            return FeatureTable(
+                entity_ids=("only",),
+                columns=("y",),
+                values=(("A",),),
+                source_payload_ids=(_PID,),
+            )
+
+    class _Classifier:
+        def fit(self, features: FeatureTable, y: object) -> None:
+            del features, y
+
+        def predict(self, features: FeatureTable) -> list[str]:
+            return ["A"] * len(features.entity_ids)
+
+    store = LocalStore(tmp_path)
+    spec = ExperimentSpec(
+        experiment_id="single-entity",
+        dataset=DatasetRef(payload_id=_PID),
+        features=FeatureSpec(views=("v",)),
+        target=TargetSpec(column="y", task="classification"),
+        model=ModelSpec(family="x"),
+        split=SplitSpec(method="holdout", seed=1, test_size=0.2),
+        metrics=(MetricSpec(name="accuracy"),),
+        seed=1,
+    )
+    with pytest.raises(ValueError, match="at least two entities"):
+        run_experiment(
+            spec,
+            rows=[{"id": "only", "y": "A"}],
+            feature_views={"v": _SingleView()},
+            adapter=_Classifier(),
+            store=store,
+            run=_run(),
+            serialize_model=lambda _model: b"model",
+        )
+
+
+def test_run_experiment_rejects_split_as_of(tmp_path: Path) -> None:
+    class _View:
+        name = "v"
+
+        def transform(
+            self,
+            rows: object,
+            *,
+            as_of: object = None,
+        ) -> FeatureTable:
+            del as_of
+            return FeatureTable(
+                entity_ids=("e1", "e2"),
+                columns=("y",),
+                values=(("A",), ("B",)),
+                source_payload_ids=(_PID, _PID),
+            )
+
+    class _Classifier:
+        def fit(self, features: FeatureTable, y: object) -> None:
+            del features, y
+
+        def predict(self, features: FeatureTable) -> list[str]:
+            return ["A"] * len(features.entity_ids)
+
+    store = LocalStore(tmp_path)
+    spec = ExperimentSpec(
+        experiment_id="as-of-footgun",
+        dataset=DatasetRef(payload_id=_PID),
+        features=FeatureSpec(views=("v",)),
+        target=TargetSpec(column="y", task="classification"),
+        model=ModelSpec(family="x"),
+        split=SplitSpec(
+            method="holdout",
+            seed=1,
+            test_size=0.2,
+            as_of=datetime(2026, 1, 1, tzinfo=UTC).date(),
+        ),
+        metrics=(MetricSpec(name="accuracy"),),
+        seed=1,
+    )
+    with pytest.raises(ValueError, match="does not support split.as_of"):
+        run_experiment(
+            spec,
+            rows=[{"id": "e1", "y": "A"}, {"id": "e2", "y": "B"}],
+            feature_views={"v": _View()},
+            adapter=_Classifier(),
+            store=store,
+            run=_run(),
+            serialize_model=lambda _model: b"model",
+        )
+
+
+def test_accuracy_rejects_bool_labels() -> None:
+    from ds_platform.modeling.evaluate import accuracy
+
+    with pytest.raises(TypeError, match="str or int labels"):
+        accuracy([True], [1])
+
+
+def test_duplicate_inputs_rejected_on_artifact_record() -> None:
+    with pytest.raises(ValidationError, match="duplicates"):
+        _record(inputs=(_PID, _PID))
+
+
+def test_self_referential_related_ref_rejected() -> None:
+    from ds_platform.types import RelatedRef, RelationType
+
+    with pytest.raises(ValidationError, match="payload_id"):
+        _record(
+            related=(RelatedRef(rel=RelationType.CLAIMS_ABOUT, payload_id=_PID),)
+        )
+
+
+def test_kfold_assignments_have_empty_validation_ids() -> None:
+    assignments = split_entities(
+        ["a", "b", "c", "d"],
+        SplitSpec(method="kfold", seed=1, n_splits=2),
+    )
+    assert all(not assignment.validation_ids for assignment in assignments)
+
+
+def test_spec_canonical_omits_empty_evidence_on_prediction_row() -> None:
+    from ds_platform.modeling.records import PredictionRow
+
+    encoded = spec_canonical_json_bytes(
+        PredictionRow(entity_id="e1", y_pred="A")
+    ).decode()
+    assert '"evidence"' not in encoded
+
+
+def test_run_experiment_rejects_zero_entities(tmp_path: Path) -> None:
+    class _EmptyView:
+        name = "v"
+
+        def transform(
+            self,
+            rows: object,
+            *,
+            as_of: object = None,
+        ) -> FeatureTable:
+            del rows, as_of
+            return FeatureTable(
+                entity_ids=(),
+                columns=("y",),
+                values=(),
+                source_payload_ids=(),
+            )
+
+    class _Classifier:
+        def fit(self, features: FeatureTable, y: object) -> None:
+            del features, y
+
+        def predict(self, features: FeatureTable) -> list[str]:
+            return []
+
+    store = LocalStore(tmp_path)
+    spec = ExperimentSpec(
+        experiment_id="zero-entities",
+        dataset=DatasetRef(payload_id=_PID),
+        features=FeatureSpec(views=("v",)),
+        target=TargetSpec(column="y", task="classification"),
+        model=ModelSpec(family="x"),
+        split=SplitSpec(method="holdout", seed=1, test_size=0.2),
+        metrics=(MetricSpec(name="accuracy"),),
+        seed=1,
+    )
+    with pytest.raises(ValueError, match="at least one entity"):
+        run_experiment(
+            spec,
+            rows=[],
+            feature_views={"v": _EmptyView()},
+            adapter=_Classifier(),
+            store=store,
+            run=_run(),
+            serialize_model=lambda _model: b"model",
+        )
 
 
 def _sidecar_for_payload(root: Path, target_payload_id: str) -> str:

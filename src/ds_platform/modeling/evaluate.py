@@ -94,6 +94,8 @@ def accuracy(y_true: Sequence[object], y_pred: Sequence[object]) -> float:
     """Return the fraction of exactly matching predictions."""
     if not y_true:
         return 0.0
+    _require_classification_labels(y_true, metric="accuracy")
+    _require_classification_labels(y_pred, metric="accuracy")
     correct = sum(
         1
         for true_value, pred_value in zip(y_true, y_pred, strict=True)
@@ -104,6 +106,8 @@ def accuracy(y_true: Sequence[object], y_pred: Sequence[object]) -> float:
 
 def macro_f1(y_true: Sequence[object], y_pred: Sequence[object]) -> float:
     """Return unweighted mean F1 across labels present in ``y_true``."""
+    _require_classification_labels(y_true, metric="macro_f1")
+    _require_classification_labels(y_pred, metric="macro_f1")
     labels = sorted({label for label in y_true}, key=repr)
     if not labels:
         return 0.0
@@ -161,6 +165,18 @@ def _as_float(value: object) -> float:
     if isinstance(value, bool) or not isinstance(value, int | float):
         raise TypeError(f"expected numeric value, got {type(value)!r}")
     return float(value)
+
+
+def _require_classification_labels(
+    values: Sequence[object],
+    *,
+    metric: str,
+) -> None:
+    for value in values:
+        if isinstance(value, bool) or not isinstance(value, str | int):
+            raise TypeError(
+                f"{metric} requires str or int labels, got {value!r}"
+            )
 
 
 _METRIC_BY_NAME: dict[str, MetricFn] = {

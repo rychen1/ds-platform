@@ -67,6 +67,11 @@ def run_experiment(
     """
     if spec.split.method != "holdout":
         raise ValueError("run_experiment v1 requires split.method == 'holdout'")
+    if spec.split.as_of is not None:
+        raise ValueError(
+            "run_experiment v1 does not support split.as_of; filter rows before "
+            "calling or use split_entities directly with timestamps"
+        )
     if spec.dataset.payload_id is None:
         raise ValueError("run_experiment requires dataset.payload_id for lineage")
 
@@ -74,6 +79,8 @@ def run_experiment(
     run_with_hash = run.model_copy(update={"config_hash": config_hash})
 
     aligned = _materialize_features(spec, rows, feature_views)
+    if not aligned.entity_ids:
+        raise ValueError("run_experiment requires at least one entity")
     labels = extract_column(aligned, spec.target.column)
     features = _select_feature_columns(aligned, spec)
     labels_by_entity = dict(zip(aligned.entity_ids, labels, strict=True))
@@ -84,6 +91,10 @@ def run_experiment(
         spec.split,
         labels=split_labels,
     )[0]
+    if not assignment.train_ids or not assignment.test_ids:
+        raise ValueError(
+            "run_experiment requires non-empty train and test assignments"
+        )
     train_features, _, test_features = apply_split(features, assignment)
 
     _fit_adapter(adapter, spec, train_features, labels_by_entity)

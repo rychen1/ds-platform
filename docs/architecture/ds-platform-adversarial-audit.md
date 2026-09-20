@@ -1,9 +1,11 @@
-# ds-platform adversarial audit
+# ds-platform adversarial audit — Pass 1 (historical)
 
 **Date:** 2026-09-19  
 **Scope:** `ds-platform` as implemented (`0.0.1`, Python 3.13, Pydantic-only core).  
 **Method:** run the existing suite, then construct cases the suite can stay green on while the architecture is still wrong.  
 **Remediation:** the CRITICAL and HIGH findings below were fixed in the subsequent implementation pass. `tests/audit/test_adversarial_audit.py` now asserts the repaired contracts. This document remains the historical investigation.
+
+**Pass 2 (post-remediation):** see [`ds-platform-adversarial-audit-pass2.md`](./ds-platform-adversarial-audit-pass2.md) for the fresh audit after those fixes.
 
 Existing production suite: **175 tests, all green.**  
 Audit-only tests: **50, all green** (they assert current behavior, including bugs).  

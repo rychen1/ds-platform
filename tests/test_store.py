@@ -73,6 +73,8 @@ def test_put_does_not_silently_mutate_existing_payload(tmp_path: Path) -> None:
         store.put(_PID, b"mutated-bytes", media_type="text/plain")
     colliding = tmp_path / _PID[:2] / _PID[2:4] / _PID
     colliding.write_bytes(b"tampered")
+    assert store.exists(_PID) is False
+    assert store.locate(_PID) is None
     with pytest.raises(HashMismatchError, match="stored bytes"):
         store.get(_PID)
     repaired = store.put(_PID, _PAYLOAD, media_type="text/plain")

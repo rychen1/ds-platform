@@ -183,7 +183,7 @@ class ArtifactRecord(_CoreModel):
     name: str | None = None
     logical_key: LogicalKey | None = None
     contract_ref: ContractRef | None = None
-    inherited_policy_refs: Sequence[str] = ()
+    inherited_policy_refs: Sequence[Sha256Hex] = ()
     inputs: Sequence[Sha256Hex] = ()
     derived_from: Sequence[Sha256Hex] = ()
     related: Sequence[RelatedRef] = ()
@@ -207,6 +207,17 @@ class ArtifactRecord(_CoreModel):
         aware = _require_aware(value)
         assert aware is not None
         return aware
+
+    @model_validator(mode="after")
+    def _validate_lineage(self) -> ArtifactRecord:
+        if len(self.inputs) != len(set(self.inputs)):
+            raise ValueError("inputs must not contain duplicates")
+        for ref in self.related:
+            if ref.payload_id == self.payload_id:
+                raise ValueError(
+                    "related must not reference this record's payload_id"
+                )
+        return self
 
 
 def new_run_id() -> str:

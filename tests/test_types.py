@@ -130,12 +130,13 @@ def test_inference_record_requires_model_or_prompt_subject() -> None:
 
 
 def test_contract_ref_and_related_refs_validate() -> None:
+    subject_id = payload_id(b"subject-payload")
     record = _record(
         contract_ref=ContractRef(
             uri="https://example.test/game.schema.json",
             schema_hash=_PID,
         ),
-        related=[RelatedRef(rel=RelationType.CLAIMS_ABOUT, payload_id=_PID)],
+        related=[RelatedRef(rel=RelationType.CLAIMS_ABOUT, payload_id=subject_id)],
     )
     assert record.contract_ref is not None
     assert record.related[0].rel is RelationType.CLAIMS_ABOUT

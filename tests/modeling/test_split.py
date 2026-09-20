@@ -192,3 +192,26 @@ def test_split_import_does_not_load_forbidden_modules() -> None:
     import ds_platform.modeling.split  # noqa: F401
 
     assert _FORBIDDEN.intersection(sys.modules) == set()
+
+
+def test_holdout_requires_at_least_two_entities() -> None:
+    with pytest.raises(ValueError, match="at least two entities"):
+        split_entities(["only"], _holdout_spec())
+
+
+def test_as_of_filter_dropping_all_entities_errors() -> None:
+    with pytest.raises(ValueError, match="no entities remain"):
+        split_entities(
+            ["e1"],
+            _holdout_spec(as_of=date(2020, 1, 1)),
+            timestamps=[date(2021, 1, 1)],
+        )
+
+
+def test_split_groups_rejects_conflicting_duplicate_labels() -> None:
+    with pytest.raises(ValueError, match="conflicting labels"):
+        split_groups(
+            ["g1", "g1"],
+            _holdout_spec(test_size=0.5),
+            labels=["A", "B"],
+        )

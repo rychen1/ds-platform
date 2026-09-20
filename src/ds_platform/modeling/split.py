@@ -46,6 +46,10 @@ def split_entities(
         timestamps=timestamps,
         as_of=spec.as_of,
     )
+    if not ids:
+        raise ValueError("no entities remain for split")
+    if spec.method in ("holdout", "temporal") and len(ids) < 2:
+        raise ValueError(f"{spec.method} split requires at least two entities")
     if spec.stratify and split_labels is None:
         raise ValueError("labels are required when stratify is enabled")
     if spec.method == "temporal" and spec.stratify:
@@ -75,7 +79,8 @@ def split_groups(
     Duplicate group ids are dropped after the first occurrence. When
     ``labels`` or ``timestamps`` are provided they align to the input
     ``group_ids`` sequence; values from the first occurrence of each
-    group are kept. Unique groups are sorted lexicographically before
+    group are kept. Conflicting labels or timestamps for the same group
+    raise ``ValueError``. Unique groups are sorted lexicographically before
     holdout or k-fold selection so incidental input order does not change
     train/test assignment for the same seed. Returned assignment ids are
     group ids.
@@ -84,18 +89,33 @@ def split_groups(
     unique_labels: list[object] | None = [] if labels is not None else None
     unique_timestamps: list[date] | None = [] if timestamps is not None else None
     seen: set[str] = set()
+    first_label_by_group: dict[str, object] = {}
+    first_timestamp_by_group: dict[str, date] = {}
     if labels is not None and len(labels) != len(group_ids):
         raise ValueError("labels length must match group_ids length")
     if timestamps is not None and len(timestamps) != len(group_ids):
         raise ValueError("timestamps length must match group_ids length")
     for index, group_id in enumerate(group_ids):
         if group_id in seen:
+            if labels is not None and labels[index] != first_label_by_group[group_id]:
+                raise ValueError(
+                    f"conflicting labels for duplicate group_id {group_id!r}"
+                )
+            if (
+                timestamps is not None
+                and timestamps[index] != first_timestamp_by_group[group_id]
+            ):
+                raise ValueError(
+                    f"conflicting timestamps for duplicate group_id {group_id!r}"
+                )
             continue
         seen.add(group_id)
         unique_ids.append(group_id)
         if unique_labels is not None and labels is not None:
+            first_label_by_group[group_id] = labels[index]
             unique_labels.append(labels[index])
         if unique_timestamps is not None and timestamps is not None:
+            first_timestamp_by_group[group_id] = timestamps[index]
             unique_timestamps.append(timestamps[index])
     order = sorted(range(len(unique_ids)), key=lambda index: unique_ids[index])
     unique_ids = [unique_ids[index] for index in order]
@@ -192,9 +212,6 @@ def _holdout_assignment(
     test_size = spec.test_size
     if not 0 < test_size < 1:
         raise ValueError("test_size must be between 0 and 1")
-
-    if not entity_ids:
-        return SplitAssignment(train_ids=(), validation_ids=(), test_ids=())
 
     if spec.stratify:
         test_ids = _stratified_holdout_test_ids(entity_ids, labels, spec, test_size)

@@ -243,6 +243,7 @@
     "inherited_policy_refs": {
       "default": [],
       "items": {
+        "pattern": "^[a-f0-9]{64}$",
         "type": "string"
       },
       "title": "Inherited Policy Refs",

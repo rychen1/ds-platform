@@ -67,7 +67,7 @@ def spec_canonical_value(value: Any) -> Any:
         return {
             str(key): spec_canonical_value(item)
             for key, item in value.items()
-            if item is not None
+            if not _omit_spec_item(item)
         }
     if isinstance(value, tuple):
         return [spec_canonical_value(item) for item in value]
@@ -90,6 +90,12 @@ def spec_canonical_value(value: Any) -> Any:
     if value is None:
         return None
     raise TypeError(f"unsupported type for spec canonical JSON: {type(value)!r}")
+
+
+def _omit_spec_item(item: Any) -> bool:
+    if item is None:
+        return True
+    return item == [] or item == ()
 
 
 def canonical_spec_float(value: float) -> dict[str, str]:

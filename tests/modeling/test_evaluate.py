@@ -67,3 +67,8 @@ def test_evaluate_import_does_not_load_forbidden_modules() -> None:
     import ds_platform.modeling.evaluate  # noqa: F401
 
     assert _FORBIDDEN.intersection(sys.modules) == set()
+
+
+def test_accuracy_rejects_bool_labels() -> None:
+    with pytest.raises(TypeError, match="str or int labels"):
+        accuracy([True], [1])

@@ -52,11 +52,12 @@ def test_payload_id_is_independent_of_filename_and_path(tmp_path: Path) -> None:
 
 
 def test_metadata_change_changes_record_id_not_payload_id() -> None:
+    quality_subject = payload_id(b"quality-subject")
     first = _record(logical_key="bga:corpus:v0")
     second = _record(
         logical_key="bga:corpus:v1",
         related=[
-            RelatedRef(rel=RelationType.QUALITY_FOR, payload_id=_PID),
+            RelatedRef(rel=RelationType.QUALITY_FOR, payload_id=quality_subject),
         ],
     )
     assert first.payload_id == second.payload_id == _PID

@@ -108,10 +108,11 @@ class LocalStore:
         return data
 
     def exists(self, payload_id: str) -> bool:
-        return self._existing_path(payload_id) is not None
+        """Return whether verified bytes for ``payload_id`` are available."""
+        return self._verified_path(payload_id) is not None
 
     def locate(self, payload_id: str) -> Location | None:
-        path = self._existing_path(payload_id)
+        path = self._verified_path(payload_id)
         if path is None:
             return None
         return self._location(path)
@@ -125,6 +126,14 @@ class LocalStore:
         if path.is_file():
             return path
         return None
+
+    def _verified_path(self, payload_id: str) -> Path | None:
+        path = self._existing_path(payload_id)
+        if path is None:
+            return None
+        if sha256_hex(path.read_bytes()) != payload_id:
+            return None
+        return path
 
     def _location(self, path: Path) -> Location:
         return Location(uri=path.resolve().as_uri())
